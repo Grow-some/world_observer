@@ -1,0 +1,7 @@
+# transformers is pinned in Dockerfile (==5.5.0); do not re-specify here to avoid open-ended upgrade
+peft>=0.18.0
+accelerate>=1.0.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.30.0
+pillow>=10.0
+torchvision>=0.20

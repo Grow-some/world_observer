@@ -1,0 +1,178 @@
+# SatelliteAgent — model server compose (GPU services only).
+#
+# The Python app server (port 7860) runs OUTSIDE Docker via
+#   uv run python -m app.server
+# because it needs the local .venv and reads ./data and config/.
+# This compose file only manages the two GPU model servers, which are
+# easier to ship as containers (they pin specific CUDA / transformers
+# versions and need a custom vLLM patch).
+#
+# Required env vars (set in .env at repo root, or export inline):
+#
+#   WILDFIRE_MODEL_DIR    Host path containing {base,adapter} subdirs of
+#                         the LFM2.5-VL-450M wildfire LoRA staging.
+#                         Default: ./models/wildfire-staging
+#                         (You can mirror it from huggingface:
+#                          LiquidAI/LFM2.5-VL-450M  → models/wildfire-staging/base
+#                          YujiYamaguchi/lfm2-5-vl-450m-wildfire → models/wildfire-staging/adapter)
+#
+#   WILDFIRE_PRECURSOR_BASE_DIR
+#                         Host path to the LFM2.5-VL-450M base dir for the
+#                         precursor service. Default points back at
+#                         WILDFIRE_MODEL_DIR's base subdir so the base is
+#                         only mounted, not duplicated:
+#                         Default: ./models/wildfire-staging/base
+#
+#   WILDFIRE_PRECURSOR_ADAPTER_DIR
+#                         Host path to the wildfire-precursor LoRA adapter
+#                         (YujiYamaguchi/lfm2-5-vl-450m-wildfire-precursor-pair14_7).
+#                         Default: ./models/wildfire-precursor-staging/adapter
+#
+#   LFM2_AGENT_MODEL_DIR  Host path to the LFM2.5-VL-450M-sft-grpo
+#                         checkpoint.
+#                         Default: ./models/LFM2.5-VL-450M-sft-grpo
+#
+#   HF_CACHE_DIR          Optional. HuggingFace cache passthrough so the
+#                         container reuses already-downloaded weights.
+#                         Default: ~/.cache/huggingface
+#
+# Quickstart:
+#
+#   docker compose up -d        # builds + starts both GPU services
+#   docker compose logs -f      # tail logs
+#   docker compose down         # stop and remove containers
+#
+# Then in another shell:
+#
+#   uv run python -m app.server # the app on http://localhost:7860
+#
+# SimSat (port 9005) is OPTIONAL — see patches/simsat/README.md.
+# Once it is set up under vendor/SimSat, you can also bring it up with:
+#   docker compose -f vendor/SimSat/docker-compose.yaml up -d sim
+# (or set SIMSAT_API_URL in .env to a remote instance and skip local sim).
+
+services:
+  lfm-wildfire:
+    build:
+      context: ./services/wildfire
+      dockerfile: Dockerfile
+    image: worldobserver/wildfire:latest
+    container_name: lfm-wildfire
+    restart: unless-stopped
+    ports:
+      - "8085:8000"
+    environment:
+      LFM_BASE_DIR:    /models/base
+      LFM_ADAPTER_DIR: /models/adapter
+      LFM_MODEL_NAME:  lfm2.5-vl-450m-wildfire
+      LFM_DEVICE:      cuda
+    volumes:
+      - "${WILDFIRE_MODEL_DIR:-./models/wildfire-staging}:/models:ro"
+      - "${HF_CACHE_DIR:-${HOME}/.cache/huggingface}:/cache/huggingface"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Same image as lfm-wildfire (transformers+peft serving), different
+  # adapter mount + port. The wildfire-precursor LoRA expects two false
+  # color frames (T-14d, T-7d) and outputs {"risk_level":"HIGH"|"LOW"};
+  # see scripts/eval_wildfire_precursor_hf{,_simsat}.py.
+  #
+  # Base + adapter are mounted as two separate volumes (instead of one
+  # parent dir like lfm-wildfire) so the base can be shared with the
+  # wildfire service without duplicating it on disk.
+  lfm-precursor:
+    build:
+      context: ./services/wildfire
+      dockerfile: Dockerfile
+      args:
+        UPGRADE_LIBS: "1"
+    image: worldobserver/wildfire:newpeft
+    container_name: lfm-precursor
+    restart: unless-stopped
+    ports:
+      - "8089:8000"
+    environment:
+      LFM_BASE_DIR:    /models/base
+      LFM_ADAPTER_DIR: /models/adapter
+      LFM_MODEL_NAME:  lfm2.5-vl-450m-wildfire-precursor
+      LFM_DEVICE:      cuda
+    volumes:
+      - "${WILDFIRE_PRECURSOR_BASE_DIR:-./models/wildfire-staging/base}:/models/base:ro"
+      - "${WILDFIRE_PRECURSOR_ADAPTER_DIR:-./models/wildfire-precursor-staging/adapter}:/models/adapter:ro"
+      - "${HF_CACHE_DIR:-${HOME}/.cache/huggingface}:/cache/huggingface"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  lfm2-agent:
+    build:
+      context: .
+      dockerfile: services/agent/Dockerfile
+    image: worldobserver/lfm2-agent:latest
+    container_name: lfm2-agent
+    restart: unless-stopped
+    ports:
+      - "8086:8000"
+    shm_size: 2g
+    volumes:
+      - "${LFM2_AGENT_MODEL_DIR:-./models/LFM2.5-VL-450M-sft-grpo}:/model:ro"
+    command:
+      - "--model"
+      - "/model"
+      - "--served-model-name"
+      - "LFM2.5-VL-450M-sft-grpo"
+      - "--port"
+      - "8000"
+      - "--host"
+      - "0.0.0.0"
+      - "--gpu-memory-utilization"
+      - "0.5"
+      - "--max-model-len"
+      - "4096"
+      - "--enforce-eager"
+      - "--trust-remote-code"
+      - "--enable-auto-tool-choice"
+      - "--tool-parser-plugin"
+      - "/agent/lfm2_tool_parser.py"
+      - "--tool-call-parser"
+      - "lfm2_pythonic"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  app-server:
+    build:
+      context: .
+      dockerfile: services/app/Dockerfile
+    image: worldobserver/app-server:latest
+    container_name: world-observer-app
+    restart: unless-stopped
+    ports:
+      - "7860:7860"
+    environment:
+      # Point to sibling containers via Docker service names
+      LFM_WILDFIRE_BASE_URL:  "http://lfm-wildfire:8000/v1"
+      LFM_PRECURSOR_BASE_URL: "http://lfm-precursor:8000/v1"
+      LFM2_AGENT_VLLM_URL:    "http://lfm2-agent:8000/v1"
+      SIMSAT_API_URL:         "${SIMSAT_API_URL:-http://localhost:9005}"
+    volumes:
+      - ./data:/app/data:ro
+      - ./config:/app/config:ro
+      - ./data/traces:/app/data/traces
+    depends_on:
+      - lfm-wildfire
+      - lfm-precursor
+      - lfm2-agent
