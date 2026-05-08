@@ -17,97 +17,35 @@ export async function loadDM3Cases() {
     const cases = data.cases || [];
     const fireedgeCases      = cases.filter(c => c.source === "FireEdge_HF");
     const precursorCases     = cases.filter(c => c.source === "FireGuard_HF");
-    const hardNegCases       = cases.filter(c => c.is_hard_negative);
-    const negativeCases      = cases.filter(c => c.is_negative && !c.is_hard_negative && c.source !== "FireEdge_HF" && c.source !== "FireGuard_HF");
-    const volcanicCases      = cases.filter(c => c.source === "GDACS_VO");
     const deforestationCases = cases.filter(c => c.source === "PRODES");
-    const habCases           = cases.filter(c => c.source === "HAB");
-    const emsCases           = cases.filter(c => c.source === "EMS");
-    const catalogCases       = cases.filter(c => c.source === "MCD64A1");
-    const otherSrc = c => !["MCD64A1","EMS","GDACS_VO","PRODES","HAB","HARD_NEG","FireEdge_HF","FireGuard_HF"].includes(c.source);
-    const preciseCases  = cases.filter(c => c.precise && !c.is_negative && otherSrc(c));
-    const coarseCases   = cases.filter(c => !c.precise && !c.is_negative && otherSrc(c));
 
     const makeOption = (c, i) => {
       const opt = document.createElement("option");
       opt.value = String(i);
-      const n = c.cached_count || 0;
-      const saved = (c.canonical_pairs || []).length > 0;
-      const mark = saved ? "★ " : n >= 2 ? "● " : n === 1 ? "◐ " : "";
-      let label = `${mark}[${c.source}] ${c.event} · ${c.disaster_type} · ${c.capture_date}`;
-      if (c.damage && c.damage.destroyed + c.damage.major > 0) {
-        label += `  (${c.damage.destroyed} destroyed + ${c.damage.major} major)`;
-      }
-      opt.textContent = label;
+      const truthy = c.expected_action === "submit_to_ground";
+      const tag = truthy ? "✓ TRUE" : "✗ FALSE";
+      opt.textContent = `[${c.source}] ${tag} · ${c.disaster_type} · ${c.id}`;
       opt.dataset.case = JSON.stringify(c);
       return opt;
     };
 
-    if (preciseCases.length) {
-      const grpP = document.createElement("optgroup");
-      grpP.label = "✅ PRECISE — per-image centroid + real pre/post + damage overlay";
-      preciseCases.forEach(c => grpP.appendChild(makeOption(c, cases.indexOf(c))));
-      sel.appendChild(grpP);
-    }
-    if (coarseCases.length) {
-      const grpC = document.createElement("optgroup");
-      grpC.label = "⚠ COARSE — event-level lat/lon (AOI may miss damage, no overlay)";
-      coarseCases.forEach(c => grpC.appendChild(makeOption(c, cases.indexOf(c))));
-      sel.appendChild(grpC);
-    }
-    if (catalogCases.length) {
-      const grpM = document.createElement("optgroup");
-      grpM.label = "🔥 MCD64A1 — wildfire burn area (MODIS, ≥1km²)";
-      catalogCases.forEach(c => grpM.appendChild(makeOption(c, cases.indexOf(c))));
-      sel.appendChild(grpM);
-    }
-    if (emsCases.length) {
-      const grpE = document.createElement("optgroup");
-      grpE.label = "🌊 EMS — Copernicus rapid mapping (flood / storm / quake / landslide)";
-      emsCases.forEach(c => grpE.appendChild(makeOption(c, cases.indexOf(c))));
-      sel.appendChild(grpE);
-    }
-    if (volcanicCases.length) {
-      const grpV = document.createElement("optgroup");
-      grpV.label = "🌋 Volcanic — GDACS eruption events (lava / ash, SWIR signal)";
-      volcanicCases.forEach(c => grpV.appendChild(makeOption(c, cases.indexOf(c))));
-      sel.appendChild(grpV);
-    }
-    if (deforestationCases.length) {
-      const grpD = document.createElement("optgroup");
-      grpD.label = "🌳 Deforestation — PRODES Amazon clearings (NDVI / NBR drop)";
-      deforestationCases.forEach(c => grpD.appendChild(makeOption(c, cases.indexOf(c))));
-      sel.appendChild(grpD);
-    }
     if (fireedgeCases.length) {
       const grpFE = document.createElement("optgroup");
-      grpFE.label = "🔥 FireEdge GT — YujiYamaguchi/fireedge-sentinel2-wildfire (HF, 300 cases)";
+      grpFE.label = "🔥 FireEdge GT — wildfire detection (use 🔥 FireEdge frame)";
       fireedgeCases.forEach(c => grpFE.appendChild(makeOption(c, cases.indexOf(c))));
       sel.appendChild(grpFE);
     }
     if (precursorCases.length) {
       const grpPC = document.createElement("optgroup");
-      grpPC.label = `🌱 FireGuard precursor — YujiYamaguchi/fireguard-sentinel2-wildfire-precursor pair14_7 (HF, ${precursorCases.length} cases, T-14d/T-7d)`;
+      grpPC.label = "🌱 FireGuard precursor — wildfire forecast T-14d/T-7d (use 🌱 FireGuard pair)";
       precursorCases.forEach(c => grpPC.appendChild(makeOption(c, cases.indexOf(c))));
       sel.appendChild(grpPC);
     }
-    if (habCases.length) {
-      const grpH = document.createElement("optgroup");
-      grpH.label = "🟢 Algal bloom — harmful algal blooms / red tide (NDCI, RGB color)";
-      habCases.forEach(c => grpH.appendChild(makeOption(c, cases.indexOf(c))));
-      sel.appendChild(grpH);
-    }
-    if (negativeCases.length) {
-      const grpN = document.createElement("optgroup");
-      grpN.label = "⊘ NEGATIVE — drop expected (no_change / cloud_blocked / random)";
-      negativeCases.forEach(c => grpN.appendChild(makeOption(c, cases.indexOf(c))));
-      sel.appendChild(grpN);
-    }
-    if (hardNegCases.length) {
-      const grpHN = document.createElement("optgroup");
-      grpHN.label = "🛑 HARD NEGATIVE — drop at positive sites in stable years (forest/volcano/pre-burn)";
-      hardNegCases.forEach(c => grpHN.appendChild(makeOption(c, cases.indexOf(c))));
-      sel.appendChild(grpHN);
+    if (deforestationCases.length) {
+      const grpD = document.createElement("optgroup");
+      grpD.label = "🌳 Deforestation — PRODES Amazon clearings (use Fetch Images)";
+      deforestationCases.forEach(c => grpD.appendChild(makeOption(c, cases.indexOf(c))));
+      sel.appendChild(grpD);
     }
   } catch (e) {
     console.error("DM3 load failed", e);
@@ -282,7 +220,6 @@ function setLoading(which, opts = {}) {
 
 function setFetching(isFetching) {
   $("fetch-btn").disabled = isFetching;
-  $("run-btn").disabled = isFetching;
   const fe = $("fetch-fireedge-btn");
   if (fe) fe.disabled = isFetching;
   const fg = $("fetch-fireguard-btn");
@@ -390,6 +327,10 @@ async function _fetchImagesWithPayload(payload, statusPrefix) {
     setLoading("after",  { hide: true });
     if (!state.beforeKey) setLoading("before", { error: true, message: data.before.meta.error || "no image" });
     if (!state.afterKey)  setLoading("after",  { error: true, message: data.after.meta.error  || "no image" });
+
+    if (state.beforeKey && state.afterKey && typeof state.onImagesReady === "function") {
+      state.onImagesReady();
+    }
   } catch (e) {
     const msg = `Fetch failed: ${e.message}`;
     setStatus(msg);
@@ -695,27 +636,89 @@ function renderGeoResults(results, parsedDates) {
   results.forEach(r => {
     const div = document.createElement("div");
     div.className = "geo-hit";
+    // Stash the hit + dates on the element itself so event delegation can
+    // recover them even if a re-render replaces the closure-bound listener.
+    div.dataset.hit = JSON.stringify(r);
+    if (parsedDates) div.dataset.dates = JSON.stringify(parsedDates);
     const shortName = r.display_name.split(",").slice(0, 3).join(",");
     const remaining = r.display_name.split(",").slice(3).join(",").trim();
     div.innerHTML = `
       <div class="geo-name">${escapeHtml(shortName)}</div>
       <div class="geo-meta">${r.lat.toFixed(4)}, ${r.lon.toFixed(4)}${remaining ? ` · ${escapeHtml(remaining)}` : ""}${r.type ? ` · ${r.type}` : ""}</div>
     `;
-    div.addEventListener("click", () => applyGeoHit(r, parsedDates));
     el.appendChild(div);
   });
 }
 
+// Event delegation: bind once on the container so clicks survive re-renders.
+let _geoResultsBound = false;
+export function bindGeoResultsClick() {
+  if (_geoResultsBound) return;
+  const container = $("geo-results");
+  if (!container) return;
+  container.addEventListener("click", (e) => {
+    const div = e.target.closest(".geo-hit");
+    if (!div || !div.dataset.hit) return;
+    let hit, dates = null;
+    try { hit = JSON.parse(div.dataset.hit); } catch { return; }
+    if (div.dataset.dates) {
+      try { dates = JSON.parse(div.dataset.dates); } catch {}
+    }
+    applyGeoHit(hit, dates);
+  });
+  _geoResultsBound = true;
+}
+
 function applyGeoHit(hit, parsedDates) {
-  $("lat").value = hit.lat.toFixed(4);
-  $("lon").value = hit.lon.toFixed(4);
+  const lat = Number(hit.lat);
+  const lon = Number(hit.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    setStatus(`geocode hit missing lat/lon: ${JSON.stringify(hit)}`);
+    return;
+  }
+  const latEl = $("lat");
+  const lonEl = $("lon");
+  latEl.value = lat.toFixed(4);
+  lonEl.value = lon.toFixed(4);
+  // Notify listeners (none right now, but future-proof if a derived field is added).
+  latEl.dispatchEvent(new Event("change", { bubbles: true }));
+  lonEl.dispatchEvent(new Event("change", { bubbles: true }));
   if (parsedDates) {
     $("before_date").value = parsedDates.before;
     $("after_date").value  = parsedDates.after;
   }
+  // Clear DM3 case binding — the user just picked a free-form geocode hit, so
+  // a previously selected DisasterM3 case no longer matches the AOI.
+  state.dm3 = null;
   state.template = null;
+  const dm3Sel = $("dm3-case");
+  if (dm3Sel) dm3Sel.value = "";
+  const dm3Gt = $("dm3-gt");
+  if (dm3Gt) dm3Gt.innerHTML = "";
+  // Reset size_km / window_days to generic defaults. Otherwise a previously
+  // selected FireEdge/FireGuard case leaves window_days=1 + a tiny footprint,
+  // which causes SimSat to return "no image available in window" for the
+  // arbitrary geocode AOI the user just picked.
+  const sizeEl = $("size_km");
+  if (sizeEl) {
+    sizeEl.value = "10";
+    const lbl = $("size_km_val");
+    if (lbl) lbl.textContent = "10";
+  }
+  const winEl = $("window_days");
+  if (winEl) {
+    winEl.value = "30";
+    const lbl2 = $("window_days_val");
+    if (lbl2) lbl2.textContent = "30";
+  }
+  // Hide the case-specific fetch buttons — they only make sense when a
+  // matching DM3 case is selected.
+  const feBtn = $("fetch-fireedge-btn");
+  if (feBtn) feBtn.style.display = "none";
+  const fgBtn = $("fetch-fireguard-btn");
+  if (fgBtn) fgBtn.style.display = "none";
   $("geo-results").innerHTML = "";
-  setStatus(`Selected: ${hit.display_name}${parsedDates ? ` | dates ${parsedDates.before} → ${parsedDates.after}` : ""}`);
+  setStatus(`Selected: ${hit.display_name}\n  lat=${lat.toFixed(4)}, lon=${lon.toFixed(4)}${parsedDates ? `\n  dates ${parsedDates.before} → ${parsedDates.after}` : ""}\n  → press Fetch Images`);
 }
 
 // Expose timer accessor for main.js to set up debounce binding

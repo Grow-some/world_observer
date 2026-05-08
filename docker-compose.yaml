@@ -38,20 +38,47 @@
 #
 # Quickstart:
 #
-#   docker compose up -d        # builds + starts both GPU services
+#   docker compose up -d        # builds + starts all services incl. SimSat
 #   docker compose logs -f      # tail logs
 #   docker compose down         # stop and remove containers
 #
-# Then in another shell:
+# Then open http://localhost:7860
 #
-#   uv run python -m app.server # the app on http://localhost:7860
+# SimSat (port 9005) is included by default in this compose file.
+# It is built from vendor/SimSat (cloned + patched by setup.sh).
+# If you prefer a remote SimSat, set SIMSAT_API_URL in .env and the
+# app-server will use it instead — simsat service startup is still
+# harmless in that case (it just won't be called).
+# To skip SimSat entirely: docker compose up -d --scale simsat=0
 #
-# SimSat (port 9005) is OPTIONAL — see patches/simsat/README.md.
-# Once it is set up under vendor/SimSat, you can also bring it up with:
-#   docker compose -f vendor/SimSat/docker-compose.yaml up -d sim
-# (or set SIMSAT_API_URL in .env to a remote instance and skip local sim).
+# All services attach to the user-defined bridge network `world-observer`,
+# so each service is reachable from the others by its compose service name
+# (e.g. http://lfm2-agent:8000, http://simsat:8000).
+
+networks:
+  world-observer:
+    driver: bridge
+    name: world-observer
 
 services:
+  # ------------------------------------------------------------------
+  # SimSat — Sentinel-2 mock backend (port 9005)
+  # Built from vendor/SimSat (run `WITH_SIMSAT=1 ./setup.sh` first).
+  # ------------------------------------------------------------------
+  simsat:
+    build:
+      context: vendor/SimSat
+      dockerfile: Dockerfile.sim
+    image: worldobserver/simsat:latest
+    container_name: world-observer-simsat
+    restart: unless-stopped
+    networks: [world-observer]
+    ports:
+      - "9005:8000"
+    shm_size: 256m
+    environment:
+      MAPBOX_ACCESS_TOKEN: "${MAPBOX_ACCESS_TOKEN:-}"
+
   lfm-wildfire:
     build:
       context: ./services/wildfire
@@ -59,6 +86,7 @@ services:
     image: worldobserver/wildfire:latest
     container_name: lfm-wildfire
     restart: unless-stopped
+    networks: [world-observer]
     ports:
       - "8085:8000"
     environment:
@@ -94,6 +122,7 @@ services:
     image: worldobserver/wildfire:newpeft
     container_name: lfm-precursor
     restart: unless-stopped
+    networks: [world-observer]
     ports:
       - "8089:8000"
     environment:
@@ -120,6 +149,7 @@ services:
     image: worldobserver/lfm2-agent:latest
     container_name: lfm2-agent
     restart: unless-stopped
+    networks: [world-observer]
     ports:
       - "8086:8000"
     shm_size: 2g
@@ -160,6 +190,7 @@ services:
     image: worldobserver/app-server:latest
     container_name: world-observer-app
     restart: unless-stopped
+    networks: [world-observer]
     ports:
       - "7860:7860"
     environment:
@@ -167,12 +198,15 @@ services:
       LFM_WILDFIRE_BASE_URL:  "http://lfm-wildfire:8000/v1"
       LFM_PRECURSOR_BASE_URL: "http://lfm-precursor:8000/v1"
       LFM2_AGENT_VLLM_URL:    "http://lfm2-agent:8000/v1"
-      SIMSAT_API_URL:         "${SIMSAT_API_URL:-http://localhost:9005}"
+      # Use the compose-internal simsat service by default.
+      # Override with SIMSAT_API_URL in .env to point at a remote instance.
+      SIMSAT_API_URL:         "${SIMSAT_API_URL:-http://simsat:8000}"
+      GOOGLE_API_KEY:         "${GOOGLE_API_KEY:-}"
     volumes:
-      - ./data:/app/data:ro
+      - ./data:/app/data
       - ./config:/app/config:ro
-      - ./data/traces:/app/data/traces
     depends_on:
       - lfm-wildfire
       - lfm-precursor
       - lfm2-agent
+      - simsat

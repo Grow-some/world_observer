@@ -1,37 +1,25 @@
 # VLM provider catalog. UI dropdown reads this at /api/providers.
+#
 # Add new entries to expose more backends; restart server to apply.
 #
 # Each entry:
 #   name:          unique key used by frontend
-#   kind:          gemini | openai_compat
+#   kind:          gemini | openai_compat | lfm2_multiturn
 #   models:        list of model ids selectable in the UI
 #                  (must match what the backend actually serves)
 #   default_model: pre-selected entry
 #   default:       (bool, optional) marks the catalog default. Exactly one
 #                  entry should set this to true; resolution does NOT depend
 #                  on YAML order.
-#   base_url:      (openai_compat only) chat-completions root,
-#                  e.g. http://host:port/v1
+#   base_url:      (openai_compat / lfm2_multiturn only) chat-completions
+#                  root, e.g. http://lfm2-agent:8000/v1
 #   api_key_env:   (openai_compat only) name of env var for bearer token
 #                  (optional)
+#
+# All in-cluster URLs use docker-compose service names; resolution is
+# guaranteed by the `world-observer` network defined in docker-compose.yaml.
 
 providers:
-  # Local vLLM serving LFM2.5-VL (drives ReAct + classify_change).
-  # Start with e.g.:
-  #   vllm serve <patched-model-dir> \
-  #     --served-model-name lfm25-vl-1.6b \
-  #     --host 127.0.0.1 --port 8002 \
-  #     --dtype bfloat16 --max-model-len 16384 \
-  #     --gpu-memory-utilization 0.80 \
-  #     --enable-auto-tool-choice --tool-call-parser hermes
-  - name: lfm25_vl_local
-    kind: openai_compat
-    base_url: http://127.0.0.1:8002/v1
-    default_model: lfm25-vl-1.6b
-    default: true
-    models:
-      - lfm25-vl-1.6b
-
   - name: gemini
     kind: gemini
     default_model: gemini-2.5-flash
@@ -48,7 +36,18 @@ providers:
   # the DM3 catalog, not from the generic Before/After cache).
   - name: lfm25_vl_sft_grpo
     kind: lfm2_multiturn
-    base_url: http://127.0.0.1:8086/v1
+    base_url: http://lfm2-agent:8000/v1
     default_model: LFM2.5-VL-450M-sft-grpo
+    models:
+      - LFM2.5-VL-450M-sft-grpo
+
+  # Default Run-Agent path. openai_compat ReAct loop driven by the same
+  # sft-grpo checkpoint. Works for any Before/After pair (no scene_id
+  # requirement, unlike lfm2_multiturn).
+  - name: lfm2_agent_openai
+    kind: openai_compat
+    base_url: http://lfm2-agent:8000/v1
+    default_model: LFM2.5-VL-450M-sft-grpo
+    default: true
     models:
       - LFM2.5-VL-450M-sft-grpo

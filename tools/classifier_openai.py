@@ -3,6 +3,19 @@
 
 Same input/output contract as classifier_gemini.make_classify_change so the
 server can swap providers transparently.
+
+Two factories live here:
+  - make_classify_change          : VLM call (re-encodes both images and
+                                    posts to the chat-completions endpoint).
+                                    Used for manual /api/tool/invoke.
+  - make_classify_change_spectral : NO second VLM call. Computes spectral
+                                    index deltas via tools.scorer and maps
+                                    them to a class verdict. Used inside the
+                                    agent ReAct loop, where the agent VLM
+                                    already sees the same images and a
+                                    re-encoded second request would just
+                                    double the per-step cost (the original
+                                    duplicate-request bug).
 """
 from __future__ import annotations
 
@@ -14,6 +27,7 @@ from typing import Any, Callable
 import requests
 
 from .classifier_gemini import CLASSIFY_PROMPT, ClassifyResult
+from .scorer import get_change_stats_impl
 
 
 def _data_url(path: str) -> str:
@@ -108,4 +122,98 @@ def make_classify_change(before_path: str, after_path: str, *,
                          api_key: str = "dummy") -> Callable[..., dict[str, Any]]:
     def classify_change(**_kwargs) -> dict[str, Any]:
         return _call_openai_classify(before_path, after_path, base_url, model, api_key)
+    return classify_change
+
+
+# ---------------------------------------------------------------------------
+# Spectral-only classify_change (no second VLM call)
+# ---------------------------------------------------------------------------
+
+# Thresholds for mapping per-index strong-fraction to a class hypothesis.
+# Tuned to match the indices the agent already sees via compute_index_delta /
+# get_change_stats so the verdicts are consistent with the spectral evidence
+# the agent fetches itself.
+_FRAC_TRIGGER = 0.10  # ≥10% of pixels showing a strong delta in the index
+
+
+def _spectral_classes(stats: dict[str, Any]) -> list[dict[str, Any]]:
+    """Map get_change_stats output to {classes:[{name,confidence}], ...}."""
+    out: list[tuple[str, float]] = []
+    by_idx = stats.get("indices") or {}
+
+    def _get(idx: str, key: str) -> float:
+        v = (by_idx.get(idx) or {}).get(key)
+        return float(v) if v is not None else 0.0
+
+    # NBR strong decrease → fire / burn
+    nbr_dec = _get("NBR", "frac_strong_decrease")
+    if nbr_dec >= _FRAC_TRIGGER:
+        out.append(("fire", min(1.0, nbr_dec * 1.5)))
+
+    # NDVI strong decrease (and not a fire signature) → deforestation
+    ndvi_dec = _get("NDVI", "frac_strong_decrease")
+    if ndvi_dec >= _FRAC_TRIGGER and nbr_dec < _FRAC_TRIGGER:
+        out.append(("deforestation", min(1.0, ndvi_dec * 1.3)))
+
+    # MNDWI strong increase → flood / new water
+    mndwi_inc = _get("MNDWI", "frac_strong_increase")
+    if mndwi_inc >= _FRAC_TRIGGER:
+        out.append(("flood", min(1.0, mndwi_inc * 1.5)))
+
+    # NDBI strong increase (and not fire/flood) → urban / built-up growth
+    ndbi_inc = _get("NDBI", "frac_strong_increase")
+    if ndbi_inc >= _FRAC_TRIGGER and nbr_dec < _FRAC_TRIGGER and mndwi_inc < _FRAC_TRIGGER:
+        out.append(("urban_growth", min(1.0, ndbi_inc * 1.5)))
+
+    if not out:
+        out.append(("no_change", 0.7))
+
+    out.sort(key=lambda t: -t[1])
+    return [{"name": n, "confidence": round(c, 3)} for n, c in out[:3]]
+
+
+def make_classify_change_spectral(
+    *,
+    lat: float,
+    lon: float,
+    before_ts: str,
+    after_ts: str,
+    size_km: float,
+    **_ignored,
+) -> Callable[..., dict[str, Any]]:
+    """Spectral-only classify_change. No VLM call — uses the same SimSat
+    multi-band fetch the rest of the spectral toolchain uses.
+    """
+    def classify_change(**_kwargs) -> dict[str, Any]:
+        try:
+            stats = get_change_stats_impl(
+                lat=lat, lon=lon,
+                before_ts=before_ts, after_ts=after_ts,
+                size_km=size_km,
+            )
+        except Exception as e:
+            return {
+                "classes": [{"name": "no_change", "confidence": 0.0}],
+                "bboxes": [],
+                "source": "spectral",
+                "error": f"{type(e).__name__}: {e}",
+            }
+        if isinstance(stats, dict) and stats.get("error"):
+            return {
+                "classes": [{"name": "no_change", "confidence": 0.0}],
+                "bboxes": [],
+                "source": "spectral",
+                "error": stats["error"],
+            }
+        return {
+            "classes": _spectral_classes(stats),
+            "bboxes": [],
+            "source": "spectral",
+            "indices_summary": {
+                k: {"mean": (v or {}).get("mean"),
+                    "frac_strong_decrease": (v or {}).get("frac_strong_decrease"),
+                    "frac_strong_increase": (v or {}).get("frac_strong_increase")}
+                for k, v in (stats.get("indices") or {}).items()
+            },
+        }
     return classify_change

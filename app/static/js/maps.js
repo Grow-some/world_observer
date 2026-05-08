@@ -130,7 +130,6 @@ export async function loadDamageOverlay() {
   // Reset both labels FIRST so repeated calls don't accumulate "GT: ..." duplicates.
   if (state.beforeMeta) setMapLabel("before", labelFor("Before", state.beforeMeta));
   if (state.afterMeta)  setMapLabel("after",  labelFor("After",  state.afterMeta));
-  if (!state.damageVisible) return;
   if (!state.dm3) return;
   if (!state.imgW || !state.imgH) return;
   if (state.dm3.source === "MCD64A1" || state.dm3.source === "PRODES") {
