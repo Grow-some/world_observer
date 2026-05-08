@@ -571,6 +571,11 @@ async function applyCandidateAsBefore(c) {
   setMapLabel("before", labelFor("Before", state.beforeMeta));
   const cc = m.cloud_cover !== undefined ? `cloud ${Number(m.cloud_cover).toFixed(1)}%` : "?";
   setStatus(`Before applied:\n  scene: ${m.datetime || sceneDate}\n  ${cc} · ${m.source || "sentinel-2"} · key=${c.key}`);
+  // Re-run quick + agent against the new pair so the trace panels reflect
+  // the user's clearer-image choice (same flow as Fetch Images completion).
+  if (state.beforeKey && state.afterKey && typeof state.onImagesReady === "function") {
+    state.onImagesReady();
+  }
 }
 
 async function applyCandidateAsAfter(c) {
@@ -585,6 +590,9 @@ async function applyCandidateAsAfter(c) {
   await loadDamageOverlay();
   const cc = m.cloud_cover !== undefined ? `cloud ${Number(m.cloud_cover).toFixed(1)}%` : "?";
   setStatus(`After applied:\n  scene: ${m.datetime || sceneDate}\n  ${cc} · ${m.source || "sentinel-2"} · key=${c.key}`);
+  if (state.beforeKey && state.afterKey && typeof state.onImagesReady === "function") {
+    state.onImagesReady();
+  }
 }
 
 // ---- Geocode (Nominatim) ----
