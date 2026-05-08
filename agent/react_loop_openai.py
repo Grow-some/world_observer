@@ -19,10 +19,25 @@ from tools.validator import ToolCallError
 from .react_loop import SYSTEM_PROMPT, _dispatch
 
 
-def _data_url(path: str) -> str:
+def _data_url(path: str, max_side: int = 512) -> str:
     p = Path(path)
     mime = "image/png" if p.suffix.lower() == ".png" else "image/jpeg"
-    b64 = base64.b64encode(p.read_bytes()).decode()
+    # Resize to max_side px on the long side before encoding to reduce token
+    # count for vision models with limited context (e.g. max-model-len 4096).
+    try:
+        from PIL import Image as _PILImage
+        import io as _io
+        img = _PILImage.open(p)
+        w, h = img.size
+        if max(w, h) > max_side:
+            ratio = max_side / max(w, h)
+            img = img.resize((max(1, int(w * ratio)), max(1, int(h * ratio))),
+                             _PILImage.LANCZOS)
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        b64 = base64.b64encode(p.read_bytes()).decode()
     return f"data:{mime};base64,{b64}"
 
 
@@ -88,20 +103,14 @@ def run_react_openai(
     max_steps: int = 10,
     timeout: float = 180.0,
     user_instructions: str | None = None,
-    forced_tool_steps: int = 2,
 ) -> Iterator[dict[str, Any]]:
     """ReAct loop driven by an OpenAI-compatible /chat/completions endpoint.
 
-    Args:
-        user_instructions: optional free-text appended to the user turn so
-            the operator can specify what to look for (e.g. "focus on the
-            western shoreline; ignore cloud cover"). Empty/None falls back
-            to the generic prompt.
-        forced_tool_steps: number of leading steps where `tool_choice` is
-            forced to "required". After that the model may answer with text
-            only (so a final natural-language summary is allowed). 0 means
-            never force; very high values reproduce the old always-required
-            behavior. Default 2 = force investigation kickoff.
+    tool_choice is always "required": the SFT/GRPO-trained LFM2.5-VL model
+    emits Python-style [func(args)] plain text instead of tool_calls JSON
+    when tool_choice="auto", so we never switch to auto. The loop
+    terminates when submit_to_ground / drop (TERMINAL_TOOLS) fires, or
+    after max_steps turns.
     """
     tools = _to_openai_tools()
     base_instruction = (
@@ -129,20 +138,20 @@ def run_react_openai(
 
     url = f"{base_url.rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
+    called_tools: list[str] = []  # track call order to inject workflow guidance
 
     for step in range(max_steps):
-        # `tool_choice="required"` for the first few turns guarantees the
-        # model actually picks up its tools instead of returning a chatty
-        # "I would inspect..." answer. After that we switch to "auto" so
-        # the model is free to terminate with a tool call AND prepend a
-        # natural-language summary in the same turn.
-        force_tool = step < forced_tool_steps
+        # Always use tool_choice="required": LFM2.5-VL-450M-sft-grpo was
+        # trained with tool_choice="required" and outputs Python-style
+        # [func(args)] plain text instead of tool_calls JSON when switched
+        # to "auto". Keeping it "required" forces proper JSON tool_calls
+        # every turn; the loop terminates when submit_to_ground/drop fires.
         body = {
             "model": model,
             "messages": messages,
             "tools": tools,
-            "tool_choice": "required" if force_tool else "auto",
-            "max_tokens": 1024,
+            "tool_choice": "required",
+            "max_tokens": 256,   # tool call JSON is short; 1024 blows context budget
             "temperature": 0.1,
         }
         try:
@@ -192,6 +201,19 @@ def run_react_openai(
             except json.JSONDecodeError:
                 args = {}
             yield {"type": "action", "name": name, "arguments": args}
+            called_tools.append(name)
+
+            # After classify_change, inject a workflow hint so the model
+            # proceeds to spectral tools instead of calling classify_change again.
+            if name == "classify_change" and called_tools.count("classify_change") == 1:
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "classify_change done. "
+                        "Now call a spectral tool (compute_index_delta / compute_index / "
+                        "fetch_band / zoom_in), then compose_report, then submit_to_ground or drop."
+                    ),
+                })
 
             try:
                 result = _dispatch(name, args, tool_registry)

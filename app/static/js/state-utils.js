@@ -48,6 +48,9 @@ export const state = {
   // Pan/zoom tracking
   viewDebounceTimer: null,
   lastViewSnapshot: null,
+  // Callback fired by dm3-fetch.js when both Before/After images are ready;
+  // wired by main.js to auto-trigger the agent + quick model in parallel.
+  onImagesReady: null,
 };
 
 // ---- DOM helpers ----

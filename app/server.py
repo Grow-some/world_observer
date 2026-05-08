@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -49,7 +50,10 @@ from tools.scorer import make_get_change_stats
 from tools.quality import assess_image_quality_impl, STATS_SCHEMA
 from tools.region import make_get_region_info
 from tools.classifier_gemini import make_classify_change as make_classify_change_gemini
-from tools.classifier_openai import make_classify_change as make_classify_change_openai
+from tools.classifier_openai import (
+    make_classify_change as make_classify_change_openai,
+    make_classify_change_spectral,
+)
 
 
 def _build_provider():
@@ -108,8 +112,18 @@ def _resolve_provider_cfg(provider_name: str | None) -> dict:
 
 
 def _make_classify_change(before_path: str, after_path: str,
-                          provider_name: str | None, model: str | None) -> Callable:
+                          provider_name: str | None, model: str | None,
+                          *,
+                          context: dict[str, Any] | None = None,
+                          for_agent: bool = False) -> Callable:
     """Resolve provider config + return classify_change callable.
+
+    If ``for_agent`` is true and the provider is openai_compat, return the
+    spectral-only variant — the agent VLM already sees the same Before/After
+    images, so re-encoding and re-posting them as a tool call would just
+    double the per-step token cost (the original duplicate-request bug).
+    Manual /api/tool/invoke keeps the VLM path so users can compare a true
+    second-opinion classification.
 
     Raises HTTPException with a precise status code so the UI/SSE surfaces
     misconfiguration instead of silently swapping providers.
@@ -126,6 +140,13 @@ def _make_classify_change(before_path: str, after_path: str,
         bound = type(PROVIDER)(model=chosen_model) if chosen_model else PROVIDER
         return make_classify_change_gemini(before_path, after_path, bound)
     if kind == "openai_compat":
+        if for_agent and context:
+            # Spectral-only path: NO second VLM request.
+            return make_classify_change_spectral(
+                lat=context["lat"], lon=context["lon"],
+                before_ts=context["before_ts"], after_ts=context["after_ts"],
+                size_km=context["size_km"],
+            )
         api_key_env = cfg.get("api_key_env")
         api_key = os.environ.get(api_key_env, "dummy") if api_key_env else "dummy"
         return make_classify_change_openai(
@@ -168,17 +189,25 @@ print(f"[startup] VLM providers: {[p.get('name') for p in PROVIDERS_CFG]}")
 def build_tool_registry(before_path: str, after_path: str,
                         context: dict[str, Any] | None = None,
                         provider_name: str | None = None,
-                        model: str | None = None) -> dict[str, Callable]:
+                        model: str | None = None,
+                        *,
+                        for_agent: bool = False) -> dict[str, Callable]:
     """Per-request tool registry shared by agent (ReAct) and human annotation.
 
     `context` carries (lat, lon, size_km, before_ts, after_ts) so that the
     spectral tools (fetch_band / false_color / compute_index) can fetch fresh
     bands from SimSat. Without context they remain stubbed.
+
+    `for_agent`: when True, classify_change uses the spectral-only impl
+    (no second VLM call) for openai_compat providers.
     """
     reg: dict[str, Callable] = {**STUB_TOOLS}
     reg["zoom_in"] = make_zoom_in(before_path, after_path)
     reg["capture_crop"] = make_capture_crop(before_path, after_path)
-    reg["classify_change"] = _make_classify_change(before_path, after_path, provider_name, model)
+    reg["classify_change"] = _make_classify_change(
+        before_path, after_path, provider_name, model,
+        context=context, for_agent=for_agent,
+    )
     if context:
         # Strip non-SimSat-fetch keys before splatting into spectral factories.
         # - region_info: reverse-geocoded sidecar (feat/toolcall, anti-fabrication)
@@ -461,7 +490,67 @@ class FetchRequest(BaseModel):
     resolution_meters: int = Field(default=10, ge=10, le=120)
 
 
-app = FastAPI(title="SatelliteAgent")
+# ---------------------------------------------------------------------------
+# Startup tool-registry validation
+# ---------------------------------------------------------------------------
+#
+# Build a sample registry at startup and verify every tool declared in
+# tools/schema.py has a callable implementation. If anything is missing we
+# print a precise diagnostic and abort the process so docker-compose marks
+# the container unhealthy instead of letting the agent silently 500 on the
+# first ReAct step. This is the inverse of the "agent invented a tool"
+# failure: catching missing tools at boot, not mid-trace.
+
+def _validate_tool_registry() -> None:
+    from tools.schema import TOOL_SCHEMAS
+
+    sample_before = APP_DIR / "static" / "favicon.ico"  # any existing file
+    sample_after  = sample_before
+    sample_ctx = {
+        "lat": 0.0, "lon": 0.0,
+        "size_km": 10.0,
+        "before_ts": "2024-01-01T00:00:00Z",
+        "after_ts":  "2024-01-02T00:00:00Z",
+        "before_actual_dt": "2024-01-01T00:00:00Z",
+        "after_actual_dt":  "2024-01-02T00:00:00Z",
+        "region_info": None,
+    }
+    try:
+        reg = build_tool_registry(
+            str(sample_before), str(sample_after),
+            context=sample_ctx, provider_name=None, model=None,
+            for_agent=True,
+        )
+    except Exception as e:
+        print(f"[startup] FATAL: failed to build sample tool registry: "
+              f"{type(e).__name__}: {e}", flush=True)
+        raise SystemExit(2)
+
+    declared = {s["name"] for s in TOOL_SCHEMAS}
+    implemented = set(reg.keys())
+    missing = sorted(declared - implemented)
+    extra   = sorted(implemented - declared)
+    if missing:
+        print("[startup] FATAL: tools declared in tools/schema.py have no "
+              "implementation in build_tool_registry():", flush=True)
+        for name in missing:
+            print(f"[startup]   - {name}", flush=True)
+        raise SystemExit(2)
+    if extra:
+        # Extras are not fatal but should be visible — agent never sees them.
+        print(f"[startup] note: implementations not in TOOL_SCHEMAS "
+              f"(invisible to agent): {extra}", flush=True)
+    print(f"[startup] tool registry OK: {len(declared)} tools "
+          f"({sorted(declared)})", flush=True)
+
+
+@asynccontextmanager
+async def _lifespan(app):
+    _validate_tool_registry()
+    yield
+
+
+app = FastAPI(title="SatelliteAgent", lifespan=_lifespan)
 
 
 DM3_CSV = APP_DIR.parent / "data" / "metadata" / "disaster_m3" / "disaster_m3_image_metadata.csv"
@@ -509,311 +598,15 @@ def _parse_iso_utc(ts: str):
     return dt.astimezone(tz.utc)
 
 
-def _load_xbd_precise_cases(top_per_event: int = 5) -> tuple[list[dict[str, Any]], set[str]]:
-    """Load per-image xBD cases with precise centroids.
-
-    Picks the top N post-disaster images per event ranked by
-    (n_destroyed + n_major_damage), pairs each with the matching
-    _pre_disaster.png to get the real Before capture date.
-
-    Returns (cases, covered_events) so the caller can skip event-level
-    xBD rows in the original DM3 CSV.
-    """
-    import csv
-    from datetime import timedelta
-
-    # Events whose Before/After dates fall outside SimSat (Element84 S2 L2A)
-    # availability — verified 2026-04-24 with 30/60/120-day windows:
-    #   hurricane_matthew:  pre=2013-01-05 is before Sentinel-2A launch (2015-06)
-    #   mexico_earthquake:  pre=2017-01-04 has no L2A coverage for ~120 days
-    SIMSAT_UNAVAILABLE = {"hurricane_matthew", "mexico_earthquake"}
-
-    if not DM3_XBD_CSV.exists():
-        return [], set()
-    with open(DM3_XBD_CSV, encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-
-    idx: dict[str, dict] = {r["image"]: r for r in rows}
-    by_event: dict[str, list[tuple[int, dict]]] = {}
-    for r in rows:
-        if "post_disaster" not in r["image"]:
-            continue
-        if r["event"] in SIMSAT_UNAVAILABLE:
-            continue
-        try:
-            dmg = int(r["n_destroyed"]) + int(r["n_major_damage"])
-        except (ValueError, KeyError):
-            continue
-        by_event.setdefault(r["event"], []).append((dmg, r))
-
-    cases: list[dict[str, Any]] = []
-    covered: set[str] = set()
-    for event, items in by_event.items():
-        items.sort(key=lambda x: -x[0])
-        picks = [r for dmg, r in items[:top_per_event] if dmg > 0]
-        if not picks:
-            continue
-        covered.add(event)
-        for r in picks:
-            pre_name = r["image"].replace("_post_disaster.", "_pre_disaster.")
-            pre = idx.get(pre_name)
-            try:
-                post_dt = _parse_iso_utc(r["capture_date"])
-            except Exception:
-                continue
-            if pre:
-                try:
-                    pre_dt = _parse_iso_utc(pre["capture_date"])
-                except Exception:
-                    pre_dt = None
-            else:
-                pre_dt = None
-            try:
-                lat = float(r["center_lat"]); lon = float(r["center_lon"])
-            except (ValueError, KeyError):
-                continue
-            mapped = DM3_TYPE_MAP.get(r["disaster_type"], "earthquake_damage")
-            n_destroyed = int(r["n_destroyed"])
-            n_major = int(r["n_major_damage"])
-            n_minor = int(r["n_minor_damage"])
-            n_none = int(r["n_no_damage"])
-            total = int(r["n_buildings"])
-            image_id = r["image"].split("_post_")[0].replace(f"{event}_", "", 1)
-            # Push After 14 days past xBD's Maxar capture date so SimSat's
-            # backward-only window safely picks up a post-disaster S2 pass.
-            # xBD post_disaster is 2-19 days after the actual event; +14d more
-            # also lets smoke/clouds clear so the change becomes visually crisp.
-            after_request_dt = post_dt + timedelta(days=14)
-            period = EVENT_PERIODS.get(event)
-            cases.append({
-                "id": f"xbd_{event}_{image_id}",
-                "source": "xBD",
-                "event": event,
-                "disaster_type": r["disaster_type"],
-                "mapped_class": mapped,
-                "capture_date": post_dt.strftime("%Y-%m-%d"),
-                "after_date":   after_request_dt.strftime("%Y-%m-%d"),
-                "before_date":  (pre_dt or (post_dt - timedelta(days=180))).strftime("%Y-%m-%d"),
-                "lat": lat,
-                "lon": lon,
-                "location": event.replace("_", " "),
-                "image": r["image"],
-                "size_km": 50.0,
-                "precise": True,
-                "event_start": period[0] if period else None,
-                "event_end":   period[1] if period else None,
-                "event_name":  period[2] if period else None,
-                "damage": {
-                    "destroyed": n_destroyed,
-                    "major":     n_major,
-                    "minor":     n_minor,
-                    "no_damage": n_none,
-                    "total":     total,
-                },
-            })
-    return cases, covered
-
-
-def _load_dm3_cases() -> list[dict[str, Any]]:
-    """Sample DisasterM3 CSV: one row per (source, event) to maximize variety.
-
-    Events already covered by precise xBD cases are skipped — those are
-    loaded separately by _load_xbd_precise_cases.
-    """
-    import csv
-    import random
-    from datetime import timedelta
-
-    xbd_cases, xbd_covered = _load_xbd_precise_cases()
-
-    if not DM3_CSV.exists():
-        return list(xbd_cases)
-    with open(DM3_CSV, encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-
-    by_event: dict[tuple[str, str], list[dict]] = {}
-    for r in rows:
-        if r["source"].lower() == "xbd" and r["event"] in xbd_covered:
-            continue
-        key = (r["source"], r["event"])
-        by_event.setdefault(key, []).append(r)
-
-    rng = random.Random(42)
-    picks = [rng.choice(v) for v in by_event.values()]
-
-    cases: list[dict[str, Any]] = list(xbd_cases)
-    for r in picks:
-        try:
-            dt = _parse_iso_utc(r["capture_date"])
-        except Exception:
-            continue
-        after_date  = dt.strftime("%Y-%m-%d")
-        before_date = (dt - timedelta(days=30)).strftime("%Y-%m-%d")
-        mapped = DM3_TYPE_MAP.get(r["disaster_type"], "earthquake_damage")
-        try:
-            lat = float(r["lat"]); lon = float(r["lon"])
-        except ValueError:
-            continue
-        period = EVENT_PERIODS.get(r["event"])
-        cases.append({
-            "id": f"{r['source'].lower()}_{r['event']}",
-            "source": r["source"],
-            "event": r["event"],
-            "disaster_type": r["disaster_type"],
-            "mapped_class": mapped,
-            "capture_date": after_date,
-            "before_date": before_date,
-            "after_date":  after_date,
-            "lat": lat,
-            "lon": lon,
-            "location": r["location"],
-            "image": r["image"],
-            "size_km": 50.0,
-            "precise": False,
-            "event_start": period[0] if period else None,
-            "event_end":   period[1] if period else None,
-            "event_name":  period[2] if period else None,
-        })
-    cases.sort(key=lambda c: (0 if c.get("precise") else 1, c["source"], c["disaster_type"], c["event"], c.get("image", "")))
-    return cases
-
-
-def _load_negative_cases() -> list[dict[str, Any]]:
-    """Load negative scenarios (drop is the expected action) from a hand- or
-    script-curated YAML. File is optional — runs no-op if absent.
-    """
-    path = APP_DIR.parent / "data" / "metadata" / "disaster_m3" / "negative_cases.yaml"
-    if not path.exists():
-        return []
-    try:
-        with open(path, encoding="utf-8") as f:
-            doc = yaml.safe_load(f) or {}
-    except Exception as e:
-        print(f"[startup] WARN: failed to load negative_cases.yaml: {e}")
-        return []
-    raw_cases = doc.get("cases", []) if isinstance(doc, dict) else []
-    out: list[dict[str, Any]] = []
-    for r in raw_cases:
-        try:
-            lat = float(r["lat"]); lon = float(r["lon"])
-        except (KeyError, ValueError, TypeError):
-            continue
-        size_km = float(r.get("size_km", 50.0))
-        before_date = r["before_date"]
-        after_date  = r["after_date"]
-        out.append({
-            "id":              r["id"],
-            "source":          "Negative",
-            "event":           r.get("parent_event") or r["id"],
-            "disaster_type":   r.get("negative_type", "no_change"),  # pre_pre / post_post / cloud_blocked / random
-            "mapped_class":    "no_change",
-            "expected_action": r.get("expected_action", "drop"),
-            "negative_type":   r.get("negative_type"),
-            "capture_date":    after_date,
-            "after_date":      after_date,
-            "before_date":     before_date,
-            "lat": lat, "lon": lon,
-            "location":        r.get("note", ""),
-            "image":           "",
-            "size_km":         size_km,
-            "precise":         False,  # not from xBD per-image
-            "is_negative":     True,
-        })
-    return out
-
-
-def _load_ems_cases() -> list[dict[str, Any]]:
-    """Load Copernicus EMS Rapid Mapping cases (positive, expected_action=submit_to_ground).
-    Schema mirrors `_load_negative_cases`. File is optional.
-    """
-    path = APP_DIR.parent / "data" / "metadata" / "disaster_m3" / "ems_cases.yaml"
-    if not path.exists():
-        return []
-    try:
-        with open(path, encoding="utf-8") as f:
-            doc = yaml.safe_load(f) or {}
-    except Exception as e:
-        print(f"[startup] WARN: failed to load ems_cases.yaml: {e}")
-        return []
-    raw_cases = doc.get("cases", []) if isinstance(doc, dict) else []
-    out: list[dict[str, Any]] = []
-    for r in raw_cases:
-        try:
-            lat = float(r["lat"]); lon = float(r["lon"])
-        except (KeyError, ValueError, TypeError):
-            continue
-        size_km = float(r.get("size_km", 50.0))
-        before_date = r["before_date"]
-        after_date  = r["after_date"]
-        countries = r.get("countries") or []
-        loc = ", ".join(countries) if countries else (r.get("name") or "")
-        out.append({
-            "id":              r["id"],
-            "source":          "EMS",
-            "event":           r.get("ems_code") or r["id"],
-            "disaster_type":   r.get("event_type", "other"),
-            "mapped_class":    r.get("event_type", "other"),
-            "expected_action": r.get("expected_action", "submit_to_ground"),
-            "ems_code":        r.get("ems_code"),
-            "ems_category":    r.get("category"),
-            "name":            r.get("name"),
-            "countries":       countries,
-            "capture_date":    after_date,
-            "after_date":      after_date,
-            "before_date":     before_date,
-            "lat": lat, "lon": lon,
-            "location":        loc,
-            "image":           "",
-            "size_km":         size_km,
-            "precise":         False,
-            "is_ems":          True,
-        })
-    return out
-
-
-def _load_volcanic_cases() -> list[dict[str, Any]]:
-    """Load GDACS volcanic event cases (positive, expected_action=submit_to_ground)."""
-    path = APP_DIR.parent / "data" / "metadata" / "disaster_m3" / "volcanic_cases.yaml"
-    if not path.exists():
-        return []
-    try:
-        with open(path, encoding="utf-8") as f:
-            doc = yaml.safe_load(f) or {}
-    except Exception as e:
-        print(f"[startup] WARN: failed to load volcanic_cases.yaml: {e}")
-        return []
-    raw_cases = doc.get("cases", []) if isinstance(doc, dict) else []
-    out: list[dict[str, Any]] = []
-    for r in raw_cases:
-        try:
-            lat = float(r["lat"]); lon = float(r["lon"])
-        except (KeyError, ValueError, TypeError):
-            continue
-        size_km = float(r.get("size_km", 10.0))
-        before_date = r["before_date"]
-        after_date  = r["after_date"]
-        loc = r.get("country") or r.get("name") or ""
-        out.append({
-            "id":              r["id"],
-            "source":          "GDACS_VO",
-            "event":           r.get("name") or r["id"],
-            "disaster_type":   "volcanic",
-            "mapped_class":    "volcanic",
-            "expected_action": r.get("expected_action", "submit_to_ground"),
-            "alertlevel":      r.get("alertlevel"),
-            "name":            r.get("name"),
-            "country":         r.get("country"),
-            "capture_date":    after_date,
-            "after_date":      after_date,
-            "before_date":     before_date,
-            "lat": lat, "lon": lon,
-            "location":        loc,
-            "image":           "",
-            "size_km":         size_km,
-            "precise":         False,
-            "is_volcanic":     True,
-        })
-    return out
+# ---- Removed loaders (May 2026) -----------------------------------------
+# The following loaders were retired together with their YAML files when the
+# UI dropdown was trimmed to just three datasets (FireEdge / FireGuard /
+# Deforestation). The original implementations covered xBD per-image cases,
+# the DM3 CSV sample, hand-curated negatives / hard-negatives / EMS / GDACS
+# volcanic / harmful-algal-bloom catalogs. They are no longer wired into
+# DM3_CASES; the underlying YAMLs were deleted from data/metadata/disaster_m3/.
+# The active loaders (FireEdge / FireGuard precursor / Deforestation) are
+# defined further below.
 
 
 def _load_deforestation_cases() -> list[dict[str, Any]]:
@@ -859,102 +652,6 @@ def _load_deforestation_cases() -> list[dict[str, Any]]:
             "size_km":         size_km,
             "precise":         False,
             "is_deforestation": True,
-        })
-    return out
-
-
-def _load_algal_bloom_cases() -> list[dict[str, Any]]:
-    """Load hand-curated harmful algal bloom cases."""
-    path = APP_DIR.parent / "data" / "metadata" / "disaster_m3" / "algal_bloom_cases.yaml"
-    if not path.exists():
-        return []
-    try:
-        with open(path, encoding="utf-8") as f:
-            doc = yaml.safe_load(f) or {}
-    except Exception as e:
-        print(f"[startup] WARN: failed to load algal_bloom_cases.yaml: {e}")
-        return []
-    raw_cases = doc.get("cases", []) if isinstance(doc, dict) else []
-    out: list[dict[str, Any]] = []
-    for r in raw_cases:
-        try:
-            lat = float(r["lat"]); lon = float(r["lon"])
-        except (KeyError, ValueError, TypeError):
-            continue
-        size_km = float(r.get("size_km", 20.0))
-        before_date = r["before_date"]
-        after_date  = r["after_date"]
-        loc = f"{r.get('country','?')}/{r.get('region','?')}"
-        out.append({
-            "id":              r["id"],
-            "source":          "HAB",
-            "event":           r.get("name") or r["id"],
-            "disaster_type":   "algal_bloom",
-            "mapped_class":    "algal_bloom",
-            "expected_action": r.get("expected_action", "submit_to_ground"),
-            "species":         r.get("species"),
-            "bloom_color":     r.get("bloom_color"),
-            "name":            r.get("name"),
-            "region":          r.get("region"),
-            "country":         r.get("country"),
-            "notes":           r.get("notes"),
-            "capture_date":    after_date,
-            "after_date":      after_date,
-            "before_date":     before_date,
-            "lat": lat, "lon": lon,
-            "location":        loc,
-            "image":           "",
-            "size_km":         size_km,
-            "precise":         False,
-            "is_algal_bloom":  True,
-        })
-    return out
-
-
-def _load_hard_negative_cases() -> list[dict[str, Any]]:
-    """Load HARD NEGATIVE cases — same lat/lon as positive sources but in
-    stable (pre-event) periods. Behaves like negative but flagged separately
-    so UI can show them in their own optgroup."""
-    path = APP_DIR.parent / "data" / "metadata" / "disaster_m3" / "hard_negative_cases.yaml"
-    if not path.exists():
-        return []
-    try:
-        with open(path, encoding="utf-8") as f:
-            doc = yaml.safe_load(f) or {}
-    except Exception as e:
-        print(f"[startup] WARN: failed to load hard_negative_cases.yaml: {e}")
-        return []
-    raw_cases = doc.get("cases", []) if isinstance(doc, dict) else []
-    out: list[dict[str, Any]] = []
-    for r in raw_cases:
-        try:
-            lat = float(r["lat"]); lon = float(r["lon"])
-        except (KeyError, ValueError, TypeError):
-            continue
-        size_km = float(r.get("size_km", 10.0))
-        before_date = r["before_date"]
-        after_date  = r["after_date"]
-        out.append({
-            "id":              r["id"],
-            "source":          "HARD_NEG",
-            "event":           r.get("parent_id") or r["id"],
-            "disaster_type":   r.get("negative_type", "no_change"),
-            "mapped_class":    "no_change",
-            "expected_action": r.get("expected_action", "drop"),
-            "negative_type":   r.get("negative_type"),
-            "parent_source":   r.get("parent_source"),
-            "parent_id":       r.get("parent_id"),
-            "biome":           r.get("biome"),
-            "capture_date":    after_date,
-            "after_date":      after_date,
-            "before_date":     before_date,
-            "lat": lat, "lon": lon,
-            "location":        r.get("note", ""),
-            "image":           "",
-            "size_km":         size_km,
-            "precise":         False,
-            "is_negative":     True,
-            "is_hard_negative": True,
         })
     return out
 
@@ -1069,17 +766,11 @@ def _load_fireguard_precursor_cases() -> list[dict[str, Any]]:
     return out
 
 
-DM3_CASES: list[dict[str, Any]] = _load_dm3_cases() + _load_negative_cases() + _load_hard_negative_cases() + _load_ems_cases() + _load_volcanic_cases() + _load_deforestation_cases() + _load_algal_bloom_cases() + _load_fireedge_hf_cases() + _load_fireguard_precursor_cases()
-_n_pos = sum(1 for c in DM3_CASES if not any(c.get(f) for f in ("is_negative","is_ems","is_volcanic","is_deforestation","is_algal_bloom")))
-_n_neg     = sum(1 for c in DM3_CASES if c.get("is_negative") and not c.get("is_hard_negative"))
-_n_hardneg = sum(1 for c in DM3_CASES if c.get("is_hard_negative"))
-_n_ems = sum(1 for c in DM3_CASES if c.get("is_ems"))
-_n_vol = sum(1 for c in DM3_CASES if c.get("is_volcanic"))
+DM3_CASES: list[dict[str, Any]] = _load_deforestation_cases() + _load_fireedge_hf_cases() + _load_fireguard_precursor_cases()
 _n_def = sum(1 for c in DM3_CASES if c.get("is_deforestation"))
-_n_hab = sum(1 for c in DM3_CASES if c.get("is_algal_bloom"))
 _n_fe  = sum(1 for c in DM3_CASES if c.get("is_fireedge"))
 _n_pre = sum(1 for c in DM3_CASES if c.get("is_precursor"))
-print(f"[startup] DisasterM3 cases loaded: {len(DM3_CASES)} (positive/neutral={_n_pos}, negative={_n_neg}, hard_negative={_n_hardneg}, ems={_n_ems}, volcanic={_n_vol}, deforestation={_n_def}, hab={_n_hab}, fireedge={_n_fe}, precursor={_n_pre})")
+print(f"[startup] DisasterM3 cases loaded: {len(DM3_CASES)} (deforestation={_n_def}, fireedge={_n_fe}, precursor={_n_pre})")
 
 
 def _load_scene_catalog() -> list[dict[str, Any]]:
@@ -1247,7 +938,7 @@ def api_dm3_cases() -> dict[str, Any]:
         except Exception:
             pass
 
-    all_cases = DM3_CASES + _load_scene_catalog()
+    all_cases = DM3_CASES  # scene_catalog (MCD64A1 etc.) intentionally excluded from the trimmed dropdown
     out: list[dict[str, Any]] = []
     for c in all_cases:
         lat = c.get("lat"); lon = c.get("lon")
@@ -1721,7 +1412,8 @@ def api_run_agent(before_key: str, after_key: str,
     cfg = _resolve_provider_cfg(provider)
     context = _context_from_keys(before_key, after_key)
     tool_registry = build_tool_registry(str(before_path), str(after_path), context,
-                                        provider_name=provider, model=model)
+                                        provider_name=provider, model=model,
+                                        for_agent=True)
 
     def generate():
         events_collected: list[dict] = []
@@ -1912,6 +1604,7 @@ def api_providers() -> dict[str, Any]:
             "kind":          p.get("kind"),
             "models":        p.get("models") or [],
             "default_model": p.get("default_model"),
+            "default":       bool(p.get("default")),
         })
     return {"providers": out}
 
@@ -2043,6 +1736,13 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 @app.get("/")
 def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+# ---------------------------------------------------------------------------
+# Watch API removed — see commit history. The agent is now driven exclusively
+# from the web UI per scene; periodic scanning was deleted along with the
+# Watch tab in the UI.
+# ---------------------------------------------------------------------------
 
 
 if __name__ == "__main__":

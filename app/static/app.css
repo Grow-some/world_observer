@@ -22,7 +22,10 @@ header {
 }
 header h1 { margin: 0 0 2px; font-size: 18px; letter-spacing: .02em; }
 header p  { margin: 0; color: #888; font-size: 12px; }
+.brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.brand .tagline { color: #777; font-size: 11px; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #simsat-info { color: #888; font-family: monospace; font-size: 11px; text-align: right; line-height: 1.5; }
+#simsat-info .info-label { color: #555; margin-right: 4px; }
 #simsat-url  { color: #6a9; }
 #provider-info { padding: 1px 6px; border-radius: 3px; font-weight: 600; }
 #provider-info.provider-gemini { background: #2d6b46; color: #c7f0d5; }
@@ -31,11 +34,67 @@ header p  { margin: 0; color: #888; font-size: 12px; }
 
 main {
   display: grid;
-  grid-template-columns: 320px 1fr 380px;
+  grid-template-columns: 200px 1fr 380px;
   gap: 10px;
   padding: 10px;
   flex: 1;
   min-height: 0;
+}
+
+/* --- Top search bar --- */
+#search-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #16161a;
+  border-bottom: 1px solid #222;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.sb-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.sb-search { flex: 1 1 220px; flex-direction: column; align-items: stretch; gap: 4px; min-width: 200px; }
+.sb-case   { flex: 2 1 320px; flex-direction: column; align-items: stretch; gap: 4px; min-width: 240px; }
+.sb-coords label, .sb-dates label, .sb-sliders label {
+  display: flex; flex-direction: column; gap: 2px;
+  font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: .05em;
+}
+.sb-coords input, .sb-dates input {
+  width: 110px;
+  padding: 4px 6px;
+  border: 1px solid #2a2a30;
+  background: #0a0a0d;
+  color: #e6e6e6;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.sb-sliders label { width: 130px; font-size: 10.5px; color: #bbb; text-transform: none; letter-spacing: 0; }
+.sb-sliders input[type=range] { width: 100%; padding: 0; }
+#search-bar #geo-search,
+#search-bar #dm3-case,
+#search-bar #cache-pair-select {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid #2a2a30;
+  background: #0a0a0d;
+  color: #e6e6e6;
+  border-radius: 4px;
+  font-size: 12px;
+}
+#search-bar #cache-use-btn {
+  padding: 4px 10px;
+  border: 1px solid #2a2a30;
+  background: #222;
+  color: #e6e6e6;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
 }
 
 #trace-sidebar {
@@ -50,41 +109,47 @@ main {
 /* --- Controls --- */
 #controls {
   background: #16161a;
-  padding: 14px;
+  padding: 10px 12px;
   border-radius: 8px;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  font-size: 12px;
 }
 #controls h2 {
-  font-size: 11px;
-  margin: 0 0 10px;
+  font-size: 10px;
+  margin: 0 0 6px;
   color: #999;
   text-transform: uppercase;
   letter-spacing: .08em;
 }
 #controls label {
   display: block;
-  margin-bottom: 10px;
-  font-size: 12px;
+  margin-bottom: 6px;
+  font-size: 11px;
   color: #bbb;
 }
 #controls input, #controls select {
   width: 100%;
-  padding: 6px 8px;
+  padding: 4px 6px;
   border: 1px solid #2a2a30;
   background: #0a0a0d;
   color: #e6e6e6;
   border-radius: 4px;
-  font-size: 13px;
-  margin-top: 4px;
+  font-size: 12px;
+  margin-top: 2px;
 }
 
-#geo-results, #before-candidates {
+#geo-results, #before-candidates, #after-candidates {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
+  max-height: 110px;
+  overflow-y: auto;
 }
-#geo-results:empty, #before-candidates:empty { display: none; }
+#geo-results:empty, #before-candidates:empty, #after-candidates:empty { display: none; }
 
 .cand-hit {
   text-align: left;
@@ -118,17 +183,19 @@ main {
 .cand-hit .cand-offset { color: #888; font-size: 10px; }
 
 .dm3-gt {
-  font-size: 11px;
+  font-size: 10.5px;
   font-family: ui-monospace, monospace;
   color: #aaa;
-  padding: 6px 8px;
+  padding: 4px 6px;
   background: #0a0a0d;
   border: 1px solid #1d1d22;
   border-radius: 4px;
-  margin-bottom: 10px;
-  line-height: 1.5;
+  margin-bottom: 6px;
+  line-height: 1.4;
   white-space: pre-wrap;
   word-break: break-word;
+  max-height: 90px;
+  overflow-y: auto;
 }
 .dm3-gt:empty { display: none; }
 .dm3-gt .gt-label { color: #6a9; font-weight: 600; }
@@ -152,40 +219,54 @@ main {
 .geo-hit .geo-name { color: #e6e6e6; font-size: 11.5px; }
 .geo-hit .geo-meta { color: #888; font-size: 10px; margin-top: 2px; font-family: ui-monospace, monospace; }
 #geo-search.pending { border-color: #4a82b8; }
-#controls input[type=range] { padding: 0; }
-#controls .row { display: flex; gap: 8px; }
-#controls .row label { flex: 1; }
+#controls input[type=range] { padding: 0; margin-top: 4px; }
+#controls .row { display: flex; gap: 6px; margin-bottom: 6px; }
+#controls .row label { flex: 1; margin-bottom: 0; }
 
 #controls .buttons {
   display: flex;
-  gap: 8px;
-  margin-top: 12px;
+  gap: 6px;
+  margin-bottom: 6px;
 }
+#controls .buttons:empty { display: none; }
 #controls button {
   flex: 1;
-  padding: 8px;
+  padding: 5px 8px;
   border: 1px solid #2a2a30;
   background: #222;
   color: #e6e6e6;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12px;
 }
 #controls button.primary { background: #3a6e9e; border-color: #4a82b8; }
 #controls button:hover { background: #2a2a30; }
 #controls button.primary:hover { background: #4a82b8; }
 
 #status {
-  margin-top: 12px;
-  padding: 8px;
+  margin-top: 4px;
+  padding: 5px 8px;
   background: #0a0a0d;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 10.5px;
   font-family: ui-monospace, "Cascadia Mono", monospace;
   white-space: pre-wrap;
-  min-height: 2.5em;
+  min-height: 1.4em;
   color: #aaa;
   border: 1px solid #1d1d22;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid #1d1d22;
+}
+.footer-label {
+  font-size: 10px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  margin-bottom: 4px;
 }
 
 .budget-bar {
@@ -207,9 +288,9 @@ main {
 /* --- Workspace --- */
 #workspace {
   display: grid;
-  /* Maps row is fixed-ish (clamped 360px..70vh) so it doesn't grow/shrink as
-     the tools panel below changes — keeps the user's spatial frame stable. */
-  grid-template-rows: minmax(360px, 70vh) auto;
+  /* Single-row: maps fill the workspace. The tools palette and watch panel
+     have been removed; spectral / classify tools are now agent-only. */
+  grid-template-rows: 1fr;
   gap: 10px;
   min-height: 0;
 }
@@ -423,7 +504,35 @@ main {
   letter-spacing: .08em;
   margin-bottom: 4px;
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
+.section-action {
+  background: transparent;
+  border: 1px solid #2a3a3a;
+  color: #6a9;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  padding: 2px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.section-action:hover { background: #1a2a2a; color: #8fc; }
+
+.link-btn {
+  width: 100%;
+  background: transparent;
+  border: 1px dashed #2a3a3a;
+  color: #6a9;
+  padding: 3px 8px;
+  border-radius: 3px;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.link-btn:hover { background: #14201c; color: #8fc; }
 .a-inline-label {
   display: flex;
   align-items: center;
@@ -726,6 +835,62 @@ button.danger:hover { background: #a04030; }
   font-size: 12px;
   line-height: 1.7;
 }
+/* Split trace panel: top half = quick-model stream, bottom half = agent loop. */
+.trace-section {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+}
+.trace-section + .trace-section { border-top: 1px solid #222; padding-top: 4px; }
+.trace-section-title {
+  font-size: 10.5px;
+  color: #888;
+  margin-bottom: 4px;
+  display: flex; align-items: center; gap: 6px;
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.trace-stream {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  font-family: ui-monospace, "Cascadia Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.trace-stream .line { margin-bottom: 4px; padding: 2px 0; }
+.trace-stream .tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 9.5px;
+  margin-right: 6px;
+  font-weight: 600;
+  letter-spacing: .03em;
+  vertical-align: middle;
+}
+.trace-stream code {
+  background: #0d0d10;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #a6d5ff;
+}
+.trace-stream .line { word-break: break-word; }
+.trace-stream .obs-summary { color: #f0dcc0; margin: 2px 0; }
+.trace-stream .obs-kv,
+.trace-stream .act-args { margin: 2px 0 2px 12px; }
+.trace-stream .kv-line { font-size: 11.5px; line-height: 1.5; color: #d0d0d0; }
+.trace-stream .kv-key  { color: #8fb8e0; }
+.trace-stream .kv-val  { color: #e6e6e6; white-space: pre-wrap; }
+.trace-stream .act-name { color: #c7f0d5; }
+.trace-stream .line.src-quick { border-left: 2px solid #1f4d6b; padding-left: 6px; }
+.trace-stream .line.src-agent { border-left: 2px solid #4d2d6b; padding-left: 6px; }
+/* Trace sidebar must allow children to flex vertically so each section gets half. */
+#trace-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+#trace-panel > .panel-header { flex: 0 0 auto; }
+#trace-panel > details { flex: 0 0 auto; }
+
 #trace .line { margin-bottom: 2px; }
 #trace .tag {
   display: inline-block;
@@ -744,6 +909,9 @@ button.danger:hover { background: #a04030; }
 .tag-view        { background: #4a4a4a; color: #ddd; }
 .tag-final       { background: #7b2d6b; color: #f5c7ea; }
 .tag-error       { background: #b33;    color: #fdd; }
+/* Source badge: distinguishes the parallel quick-model stream from the agent loop. */
+.tag-src-quick   { background: #1f4d6b; color: #cfe6ff; }
+.tag-src-agent   { background: #4d2d6b; color: #e0ccff; }
 #trace code {
   background: #0d0d10;
   padding: 1px 4px;
