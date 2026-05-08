@@ -1,19 +1,19 @@
 # Known Issues
 
-現在オープン中の既知問題はありません。
+No open known issues at the moment.
 
-## 解決済み
+## Resolved
 
-### `127.0.0.1:8002 Connection refused` エラー
-- 原因：`providers.yaml` の `lfm25_vl_local` エントリ（`127.0.0.1:8002`）はコンテナから到達不能。
-- 対応：`lfm25_vl_local` を `providers.yaml` から削除。デフォルトは `lfm2_agent_openai`（Docker サービス名で `lfm2-agent` に到達）。
-- ブラウザに古い選択値が残っている場合は DevTools → Application → localStorage → `satagent.vlm` を削除して再読込。
+### `127.0.0.1:8002 Connection refused` error
+- Cause: the `lfm25_vl_local` entry in `providers.yaml` (`127.0.0.1:8002`) was unreachable from inside the container.
+- Fix: removed `lfm25_vl_local` from `providers.yaml`. The default is now `lfm2_agent_openai` (which reaches `lfm2-agent` via the Docker service name).
+- If a stale selection lingers in the browser, delete `satagent.vlm` from DevTools → Application → localStorage and reload.
 
-### Watch スキャンが `end_turn` で終わる
-- 対応：Watch 機能は廃止。エージェントは Web UI からシーン単位で実行する形に統一。`/api/watch/*`、`app/static/js/watch.js`、関連 CSS とデータファイル（`data/watch_list.json`、`data/watch_results.json`）を削除済み。
+### Watch scans ended with `end_turn`
+- Fix: the Watch feature has been retired. The agent is now driven from the Web UI on a per-scene basis. `/api/watch/*`, `app/static/js/watch.js`, the related CSS, and data files (`data/watch_list.json`, `data/watch_results.json`) have all been removed.
 
-### `classify_change` の二重 VLM リクエスト
-- 対応：`classifier_openai.py` に `make_classify_change_spectral` を追加し、`for_agent=True` かつ `openai_compat` プロバイダー（エージェント本体と同一 VLM）の場合はスペクトル統計から判定するように変更。VLM へ二度目の画像投入をしない。手動 `/api/tool/invoke` 経由は従来どおり VLM 判定（セカンドオピニオン用途）。
+### Duplicate VLM requests in `classify_change`
+- Fix: added `make_classify_change_spectral` to `classifier_openai.py`. When `for_agent=True` and the provider is `openai_compat` (the same VLM as the agent itself), classification is now derived from spectral statistics, so no second image is sent to the VLM. Manual invocations via `/api/tool/invoke` still use VLM-based classification (for second-opinion use).
 
-### TOOL_SCHEMAS と `build_tool_registry` の乖離
-- 対応：`tools/schema.py` に欠けていた 6 ツール（`compute_index_delta`、`get_change_stats`、`detect_wildfire`、`predict_wildfire`、`analyze`、`capture_crop`）を追加。さらにサーバー起動時に `_validate_tool_registry` が `TOOL_SCHEMAS` のすべての名前が `build_tool_registry` で実装されているかを確認し、欠落があれば `SystemExit(2)` でコンテナを停止する。
+### Drift between `TOOL_SCHEMAS` and `build_tool_registry`
+- Fix: added the six tools missing from `tools/schema.py` (`compute_index_delta`, `get_change_stats`, `detect_wildfire`, `predict_wildfire`, `analyze`, `capture_crop`). On server startup `_validate_tool_registry` now confirms that every name in `TOOL_SCHEMAS` is implemented by `build_tool_registry`, and aborts the container with `SystemExit(2)` if anything is missing.

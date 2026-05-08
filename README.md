@@ -1,58 +1,59 @@
 # world_observer
 
-衛星オンボードで動く小型 VLM エージェントが、ダウンリンク帯域を自律的に節約する PoC です。
-LFM2.5-VL を ReAct ループで動かし、Sentinel-2 の Before/After フレームを変化分類して
-`submit_to_ground` か `drop` を判定します。Gemini / 局所 vLLM 1.6B / 学習済
-LFM2.5-VL-450M-sft-grpo の 3 系統を UI から切替可能です。
+A PoC of a small VLM agent that runs onboard a satellite and autonomously
+saves downlink bandwidth. LFM2.5-VL is driven in a ReAct loop, classifies
+change between Sentinel-2 Before/After frames, and decides between
+`submit_to_ground` and `drop`. Three backends are switchable from the UI:
+Gemini, a local vLLM 1.6B, and the fine-tuned LFM2.5-VL-450M-sft-grpo.
 
-## 構成
+## Layout
 
 ```
 world_observer/
 ├─ README.md
 ├─ LICENSE
-├─ pyproject.toml               Python パッケージ定義 (uv 管理)
+├─ pyproject.toml               Python package definition (managed by uv)
 ├─ setup.sh                     uv sync + SimSat clone + patch
-├─ docker-compose.yaml          wildfire LoRA / LFM2 agent vLLM の起動定義
-├─ .env.example                 環境変数テンプレ
+├─ docker-compose.yaml          Service definitions for wildfire LoRA / LFM2 agent vLLM
+├─ .env.example                 Environment variable template
 │
-├─ app/                         FastAPI バックエンド + フロント
+├─ app/                         FastAPI backend + frontend
 │  ├─ server.py                 /api/fetch, /api/run_agent (SSE)
 │  └─ static/                   index.html / app.css / js/
 │
-├─ agent/                       ReAct ループ
-│  ├─ react_loop_openai.py      OpenAI 互換経路 (Gemini / 局所 vLLM)
-│  ├─ react_loop.py             google-genai SDK 経路
-│  ├─ lfm2_agent.py             LFM2.5-VL-450M-sft-grpo 用 multi-turn loop
-│  ├─ lfm2_tool_parser.py       vLLM 用 pythonic tool parser
+├─ agent/                       ReAct loop
+│  ├─ react_loop_openai.py      OpenAI-compatible path (Gemini / local vLLM)
+│  ├─ react_loop.py             google-genai SDK path
+│  ├─ lfm2_agent.py             Multi-turn loop for LFM2.5-VL-450M-sft-grpo
+│  ├─ lfm2_tool_parser.py       Pythonic tool parser for vLLM
 │  ├─ providers.py
 │  └─ prompts/
 │
-├─ tools/                       エージェントツール (vision / wildfire / spectral / region / quality / classifier ...)
-├─ simsat_client/               SimSat (Sentinel-2 mock backend) の HTTP wrapper
+├─ tools/                       Agent tools (vision / wildfire / spectral / region / quality / classifier ...)
+├─ simsat_client/               HTTP wrapper for SimSat (Sentinel-2 mock backend)
 │
-├─ services/                    Docker で起動するモデルサーブ
+├─ services/                    Model serving stacks launched via Docker
 │  ├─ wildfire/                 FireEdge LoRA (transformers + peft, :8085)
 │  └─ agent/                    LFM2.5-VL-450M-sft-grpo (vLLM, :8086)
 │
 ├─ config/
-│  ├─ providers.yaml            VLM provider カタログ (UI Settings ▼)
-│  └─ catalog_regions.yaml      地域カタログ
+│  ├─ providers.yaml            VLM provider catalog (UI Settings ▼)
+│  └─ catalog_regions.yaml      Region catalog
 │
 ├─ scripts/
-│  ├─ download_models.sh        HF Hub からモデル重みを取得
-│  ├─ smoke_test.sh             起動〜1経路の自動検証
+│  ├─ download_models.sh        Fetch model weights from HF Hub
+│  ├─ smoke_test.sh             Automated check from boot through one path
 │  └─ serve_vllm_lfm2.sh
 │
-└─ patches/simsat/              SimSat fork へのローカルパッチ
+└─ patches/simsat/              Local patches for the SimSat fork
 ```
 
-## 必要なもの
+## Requirements
 
-- Linux (Ubuntu 24.04 で確認)
-- Python 3.10+ (`uv` 推奨)
+- Linux (verified on Ubuntu 24.04)
+- Python 3.10+ (`uv` recommended)
 - Docker
-- GPU (ローカル推論サーバを動かす場合のみ。Gemini 経路だけなら不要)
+- GPU (only when running local inference servers; not required for the Gemini-only path)
 
 ## Quickstart
 
@@ -60,31 +61,31 @@ world_observer/
 git clone https://github.com/Grow-some/world_observer.git
 cd world_observer
 
-cp .env.example .env              # 必要なら GOOGLE_API_KEY を記入
-WITH_SIMSAT=1 ./setup.sh          # uv sync + SimSat clone + patch + sim 起動
-./scripts/download_models.sh      # モデル重みを HF Hub から DL
+cp .env.example .env              # fill in GOOGLE_API_KEY if needed
+WITH_SIMSAT=1 ./setup.sh          # uv sync + SimSat clone + patch + sim launch
+./scripts/download_models.sh      # pull model weights from HF Hub
 docker compose up -d              # wildfire LoRA :8085 + LFM2 agent vLLM :8086
-./scripts/smoke_test.sh           # 動作確認
-uv run python -m app.server       # アプリ起動
+./scripts/smoke_test.sh           # sanity check
+uv run python -m app.server       # start the app
 ```
 
-ブラウザで <http://localhost:7860> を開きます。
+Open <http://localhost:7860> in a browser.
 
-## サービス構成
+## Service layout
 
-| サーバ | port | 役割 | 起動 |
+| Server | Port | Role | Launch |
 |---|---:|---|---|
 | SimSat | 9005 | Sentinel-2 mock backend | `WITH_SIMSAT=1 ./setup.sh` |
-| wildfire LoRA | 8085 | `detect_wildfire` ツールが叩く FireEdge LoRA | `docker compose up -d lfm-wildfire` |
-| LFM2 agent vLLM | 8086 | LFM2.5-VL-450M-sft-grpo を vLLM で配信 | `docker compose up -d lfm2-agent` |
+| wildfire LoRA | 8085 | FireEdge LoRA called by the `detect_wildfire` tool | `docker compose up -d lfm-wildfire` |
+| LFM2 agent vLLM | 8086 | Serves LFM2.5-VL-450M-sft-grpo via vLLM | `docker compose up -d lfm2-agent` |
 
-## 環境変数
+## Environment variables
 
-`.env.example` を `.env` にコピー。通常は空のままで動きます。
+Copy `.env.example` to `.env`. It can normally stay empty.
 
 ```bash
-GOOGLE_API_KEY=          # Settings ⚙ で Gemini を選ぶ場合のみ
-SIMSAT_API_URL=          # SimSat がリモートの場合のみ (既定 http://localhost:9005)
+GOOGLE_API_KEY=          # only when selecting Gemini in Settings ⚙
+SIMSAT_API_URL=          # only when SimSat is remote (default http://localhost:9005)
 ```
 
 ## License

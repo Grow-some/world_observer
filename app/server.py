@@ -1389,6 +1389,10 @@ def _run_lfm2_as_events(scene_id: str, base_url: str,
         "before_date": case["before_date"],
         "after_date":  case["after_date"],
         "size_km":     float(case.get("size_km", 10.0)),
+        # Forward window_days so the agent's realtime SimSat fetch lands on
+        # the same STAC item the visible RGB pair was built from. FireEdge /
+        # FireGuard cases pin window_days=1.
+        "window_days": int(case.get("window_days") or 30),
     }
     served = served_model or os.environ.get("LFM2_AGENT_MODEL", "LFM2.5-VL-450M-sft-grpo")
     yield from iter_lfm2_agent(

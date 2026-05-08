@@ -201,19 +201,31 @@ def realtime_case_features(case_meta: dict):
     bd  = case_meta["before_date"]
     ad  = case_meta["after_date"]
     size_km = float(case_meta.get("size_km", 10.0))
+    # Honor the case's window_days so we re-fetch the SAME scene the user
+    # already sees in the UI. Hardcoding window_days=30 used to pull a
+    # different STAC item for FireEdge / FireGuard (which pin window=1) and
+    # caused "SimSat returned empty body" even when the visible RGB fetch
+    # had succeeded.
+    window_days = int(case_meta.get("window_days") or 30)
     base_url = os.environ.get("SIMSAT_API_URL", "http://localhost:9005")
 
     try:
         sa_b = fetch_sentinel_array(lat=lat, lon=lon, timestamp=bd,
                                      bands=_REALTIME_BANDS, size_km=size_km,
                                      base_url=base_url, resolution_meters=10,
-                                     window_days=30, timeout=120)
+                                     window_days=window_days, timeout=120)
         sa_a = fetch_sentinel_array(lat=lat, lon=lon, timestamp=ad,
                                      bands=_REALTIME_BANDS, size_km=size_km,
                                      base_url=base_url, resolution_meters=10,
-                                     window_days=30, timeout=120)
+                                     window_days=window_days, timeout=120)
     except SimSatError as e:
-        return {"_error": f"SimSat fetch failed: {e}"}
+        # Surface a human-readable hint instead of the raw "empty body" string.
+        msg = str(e)
+        if "empty body" in msg.lower():
+            msg = (f"SimSat could not assemble a 5-band scene for the requested "
+                   f"date (window_days={window_days}, size_km={size_km}). "
+                   f"The visible RGB image may use a different STAC item.")
+        return {"_error": f"SimSat fetch failed: {msg}"}
 
     ds_b = {name: sa_b.array[i] for i, name in enumerate(sa_b.band_names)}
     ds_a = {name: sa_a.array[i] for i, name in enumerate(sa_a.band_names)}
