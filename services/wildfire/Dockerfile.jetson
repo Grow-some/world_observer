@@ -1,0 +1,54 @@
+# Jetson (aarch64 / JetPack 6.1+, L4T r36.4)
+#
+# pytorch/pytorch does not publish ARM CUDA builds.
+# NVIDIA's official L4T-PyTorch image provides PyTorch 2.3 + torchvision 0.18
+# pre-installed against CUDA 12.6 / cuDNN 9.
+#
+# Build (from repo root):
+#   docker build -t worldobserver/wildfire:jetson \
+#     -f services/wildfire/Dockerfile.jetson services/wildfire/
+#
+# Or via docker-compose.jetson.yaml.
+FROM nvcr.io/nvidia/l4t-pytorch:r36.4.0-pth2.3-py3
+
+# Install uv via the official installer script.
+# Ref: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+ADD https://astral.sh/uv/install.sh /uv-installer.sh
+RUN sh /uv-installer.sh && rm /uv-installer.sh
+
+# --system-site-packages makes the venv inherit torch + torchvision
+# that are pre-installed in the L4T base image.
+RUN /root/.local/bin/uv venv --python 3.10 --system-site-packages /opt/venv
+
+ENV PYTHONUNBUFFERED=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    UV_NO_CACHE=1 \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:/root/.local/bin:${PATH}"
+
+WORKDIR /app
+
+# Pin transformers to match the LoRA fine-tune environment.
+# torch and torchvision are already present via --system-site-packages; skip them.
+RUN uv pip install "transformers==5.5.0"
+
+COPY requirements.txt /app/requirements.txt
+# Exclude torchvision — already provided by the L4T base.
+RUN grep -Ev '^torchvision' requirements.txt | uv pip install -r /dev/stdin
+
+# The wildfire-precursor LoRA needs transformers >=5.7 and peft >=0.19.
+# Set UPGRADE_LIBS=1 at build time when serving the precursor adapter.
+ARG UPGRADE_LIBS=0
+RUN if [ "$UPGRADE_LIBS" = "1" ]; then \
+        uv pip install \
+            "transformers>=5.7,<5.8" \
+            "peft>=0.19,<0.20"; \
+    fi
+
+COPY server.py /app/server.py
+
+EXPOSE 8000
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]

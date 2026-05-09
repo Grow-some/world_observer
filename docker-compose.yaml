@@ -154,7 +154,7 @@ services:
       - "8086:8000"
     shm_size: 2g
     volumes:
-      - "${LFM2_AGENT_MODEL_DIR:-./models/LFM2.5-VL-450M-sft-grpo}:/model:ro"
+      - "${LFM2_AGENT_MODEL_DIR:-./models/sft-grpo}:/model:ro"
     command:
       - "--model"
       - "/model"

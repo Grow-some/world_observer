@@ -10,19 +10,36 @@
 #   3. Create an empty .env template if one isn't there yet.
 #   4. (Optional, WITH_SIMSAT=1) Clone DPhi-Space/SimSat at the pinned
 #      SHA into vendor/SimSat and apply patches/simsat/*.patch.
-#   5. docker compose up -d on the two GPU services
-#      (assumes WILDFIRE_MODEL_DIR / LFM2_AGENT_MODEL_DIR are set in
-#      .env or already exported — see scripts/download_models.sh).
+#      (The simsat container itself is started later via docker compose up -d.)
 #
 # Usage:
 #   ./setup.sh                     # core install only
-#   WITH_SIMSAT=1 ./setup.sh       # also clone+patch+run SimSat
+#   WITH_SIMSAT=1 ./setup.sh       # also clone+patch SimSat
 #
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-echo "[1/5] checking uv..."
+echo "[0/4] checking architecture..."
+ARCH="$(uname -m)"
+if [[ "$ARCH" == "x86_64" ]]; then
+    echo "  ok ($ARCH)"
+elif [[ "$ARCH" == "aarch64" ]]; then
+    if [[ -f /etc/nv_tegra_release ]] || [[ "${JETSON:-0}" == "1" ]]; then
+        echo "  Jetson detected ($ARCH) — GPU services require the Jetson compose override:"
+        echo "    docker compose -f docker-compose.yaml -f docker-compose.jetson.yaml up -d"
+    else
+        echo "  WARNING: aarch64 detected but no Jetson signature found (/etc/nv_tegra_release)."
+        echo "  If this is a Jetson device, re-run with: JETSON=1 ./setup.sh"
+        echo "  Non-Jetson ARM is not supported for GPU services."
+    fi
+else
+    echo "  ERROR: unsupported architecture '$ARCH'."
+    echo "  Supported: x86_64 (standard) and aarch64 on NVIDIA Jetson (JETSON=1)."
+    exit 1
+fi
+
+echo "[1/4] checking uv..."
 if ! command -v uv >/dev/null 2>&1; then
     echo "  ERROR: uv is not installed."
     echo "  Install it from https://github.com/astral-sh/uv (e.g. 'pip install uv')"
@@ -30,34 +47,18 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 echo "  ok ($(uv --version))"
 
-echo "[2/5] uv sync..."
+echo "[2/4] uv sync..."
 uv sync --extra simsat --extra geo
 
-echo "[3/5] .env template..."
+echo "[3/4] .env template..."
 if [ -f .env ]; then
     echo "  .env already exists — leaving it alone"
 else
-    cat > .env <<'EOF'
-# Optional — only when Settings ⚙ → Provider = Gemini
-# GOOGLE_API_KEY=
-
-# Optional — only when running scripts/collect_firms_fire.py
-# FIRMS_MAP_KEY=
-
-# Optional override (default: http://localhost:9005)
-# SIMSAT_API_URL=http://localhost:9005
-
-# Required by docker-compose.yaml — see scripts/download_models.sh
-# WILDFIRE_MODEL_DIR=./models/wildfire-staging
-# WILDFIRE_PRECURSOR_ADAPTER_DIR=./models/wildfire-precursor-staging/adapter
-# (WILDFIRE_PRECURSOR_BASE_DIR defaults to wildfire-staging/base — leave
-# alone unless the precursor uses a different base.)
-# LFM2_AGENT_MODEL_DIR=./models/sft-grpo
-EOF
-    echo "  wrote .env (all keys commented out — uncomment as needed)"
+    cp .env.example .env
+    echo "  copied .env.example → .env (all keys commented out — uncomment as needed)"
 fi
 
-echo "[4/5] SimSat (optional)..."
+echo "[4/4] SimSat (optional)..."
 if [[ "${WITH_SIMSAT:-0}" == "1" ]]; then
     SIMSAT_SHA="52f5619330c1edbb2e330b2961a1a551bebc0d69"
     if [ ! -d vendor/SimSat ]; then
@@ -75,29 +76,24 @@ if [[ "${WITH_SIMSAT:-0}" == "1" ]]; then
         echo "  patches already applied (or repo dirty) — skipping"
     fi
     popd >/dev/null
-    echo "  starting SimSat container on :9005..."
-    docker compose -f vendor/SimSat/docker-compose.yaml up -d sim
+    echo "  SimSat ready at vendor/SimSat — run 'docker compose up -d' to start it."
 else
     echo "  skipped (set WITH_SIMSAT=1 to enable)."
     echo "  If you already have a reachable SimSat, set SIMSAT_API_URL in .env."
 fi
 
-echo "[5/5] GPU services (docker compose up -d)..."
-if grep -qE '^[[:space:]]*WILDFIRE_MODEL_DIR=' .env 2>/dev/null \
-   || [[ -n "${WILDFIRE_MODEL_DIR:-}" ]]; then
-    docker compose up -d
+if [[ "${ARCH}" == "aarch64" ]]; then
+    COMPOSE_CMD="docker compose -f docker-compose.yaml -f docker-compose.jetson.yaml up -d"
 else
-    echo "  WILDFIRE_MODEL_DIR / LFM2_AGENT_MODEL_DIR are not set yet."
-    echo "  Run ./scripts/download_models.sh first, then 'docker compose up -d'."
+    COMPOSE_CMD="docker compose up -d"
 fi
 
-cat <<'EOF'
+cat <<EOF
 
 Setup complete. Next:
 
-    ./scripts/download_models.sh        # ~3 GB pull from HF Hub
-    docker compose up -d                # start GPU services (if not done above)
-    uv run python -m app.server         # start the app
+    ./scripts/download_models.sh   # ~3 GB pull from HF Hub
+    $COMPOSE_CMD  # start all services (SimSat + GPU servers + app)
+    # open http://localhost:7860
 
-then open http://localhost:7860
 EOF

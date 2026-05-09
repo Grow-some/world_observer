@@ -1,0 +1,35 @@
+# Jetson (aarch64 / JetPack 6.1+, L4T r36.4)
+#
+# vllm/vllm-openai has no ARM/Jetson builds.
+# dustynv/vllm (jetson-containers) provides vLLM compiled for aarch64 + CUDA.
+#
+# Tag format: dustynv/vllm:<vllm-version>-r<l4t-release>
+# Current tags: https://hub.docker.com/r/dustynv/vllm/tags
+# Set VLLM_BASE at build time to pin a specific version, e.g.:
+#   --build-arg VLLM_BASE=dustynv/vllm:0.6.6-r36.4.0
+#
+# Build (from repo root):
+#   docker build -t worldobserver/lfm2-agent:jetson \
+#     --build-arg VLLM_BASE=dustynv/vllm:r36.4.0 \
+#     -f services/agent/Dockerfile.jetson .
+#
+# Or via docker-compose.jetson.yaml.
+ARG VLLM_BASE=dustynv/vllm:r36.4.0
+FROM ${VLLM_BASE}
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git \
+ && rm -rf /var/lib/apt/lists/*
+
+# Match the transformers / tokenizers versions used in the x86 image.
+RUN pip install --no-cache-dir \
+    "transformers==5.5.0" \
+    "tokenizers==0.22.2" \
+    "huggingface_hub==1.9.0" \
+    "mistral_common==1.11.0" \
+    "safetensors==0.6.2"
+
+COPY agent/lfm2_tool_parser.py /agent/lfm2_tool_parser.py
+
+# Entrypoint (vllm serve) is inherited from the dustynv base image.
+EXPOSE 8000
