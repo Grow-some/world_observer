@@ -19,7 +19,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "classify_change",
         "description": (
-            "Run the onboard LFM2-VL change classifier on a before/after image pair. "
+            "Run the onboard LFM2.5-VL change classifier on a before/after image pair. "
             "Returns candidate change classes with confidences and bounding boxes."
         ),
         "input_schema": {

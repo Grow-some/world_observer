@@ -1,7 +1,7 @@
 [project]
 name = "satellite-agent"
 version = "0.1.0"
-description = "Onboard LFM2-VL agent for satellite downlink optimization"
+description = "Onboard LFM2.5-VL agent for satellite downlink optimization"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
