@@ -32,6 +32,42 @@ header p  { margin: 0; color: #888; font-size: 12px; }
 #provider-info.provider-vllm   { background: #2d4f6b; color: #c7e0f0; }
 #provider-info.provider-stub   { background: #7a5a1a; color: #ffd78a; }
 
+/* --- Service health banner --- */
+#health-banner {
+  padding: 6px 12px;
+  font-family: monospace;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid #333;
+  cursor: pointer;
+}
+#health-banner.health-pending { background: #2d2a1a; color: #ffd78a; }
+#health-banner.health-degraded { background: #5a1a1a; color: #ffd0d0; }
+#health-banner.health-warn     { background: #2d2a1a; color: #ffd78a; }
+#health-banner.health-ok       { background: #1a3a2d; color: #c7f0d5; }
+
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+.spinner[hidden] { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.search-hint {
+  font-size: 10.5px;
+  color: #888;
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
 main {
   display: grid;
   grid-template-columns: 200px 1fr 380px;
@@ -61,6 +97,10 @@ main {
 }
 .sb-search { flex: 1 1 220px; flex-direction: column; align-items: stretch; gap: 4px; min-width: 200px; }
 .sb-case   { flex: 2 1 320px; flex-direction: column; align-items: stretch; gap: 4px; min-width: 240px; }
+.sb-label {
+  font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: .05em;
+  margin-bottom: -2px;
+}
 .sb-coords label, .sb-dates label, .sb-sliders label {
   display: flex; flex-direction: column; gap: 2px;
   font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: .05em;

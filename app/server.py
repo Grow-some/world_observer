@@ -1039,6 +1039,49 @@ def api_templates() -> dict[str, Any]:
     }
 
 
+@app.get("/api/health")
+def api_health() -> dict[str, Any]:
+    """Lightweight readiness probe for the dependency containers.
+
+    The UI polls this on boot (and periodically) so the operator can tell
+    *before* clicking Fetch / Run Agent whether SimSat / wildfire LoRA /
+    LFM2 vLLM are actually up. Each probe has a tight timeout so a slow
+    starter doesn't stall the whole page.
+    """
+    import requests as _requests
+
+    targets = [
+        ("simsat",         os.environ.get("SIMSAT_API_URL", "http://localhost:9005").rstrip("/") + "/",            False),
+        ("wildfire_lora",  os.environ.get("LFM_WILDFIRE_BASE_URL", "http://localhost:8085/v1").rstrip("/") + "/models",  True),
+        ("precursor_lora", os.environ.get("LFM_PRECURSOR_BASE_URL", "http://localhost:8089/v1").rstrip("/") + "/models", True),
+        ("lfm2_agent",     os.environ.get("LFM2_AGENT_VLLM_URL", "http://localhost:8086/v1").rstrip("/") + "/models",    True),
+    ]
+
+    services: dict[str, dict[str, Any]] = {}
+    for name, url, optional in targets:
+        try:
+            r = _requests.get(url, timeout=2.0)
+            ok = (r.status_code < 500)
+            services[name] = {
+                "ok":       ok,
+                "status":   r.status_code,
+                "url":      url,
+                "optional": optional,
+            }
+        except Exception as e:
+            services[name] = {
+                "ok":       False,
+                "error":    f"{type(e).__name__}: {e}",
+                "url":      url,
+                "optional": optional,
+            }
+
+    # `ready` ignores optional services so the Gemini-only path doesn't show
+    # red just because the local GPU servers aren't running.
+    ready = all(s["ok"] for s in services.values() if not s.get("optional"))
+    return {"ready": ready, "services": services}
+
+
 class BeforeCandidatesRequest(BaseModel):
     lat: float
     lon: float

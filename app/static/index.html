@@ -6,14 +6,14 @@
 <link rel="icon" type="image/png" href="/static/favicon.png">
 <link rel="apple-touch-icon" href="/static/favicon.png">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="/static/app.css?v=2026050809">
+<link rel="stylesheet" href="/static/app.css?v=2026050916">
 </head>
 <body>
 
 <header>
   <div class="brand">
     <h1>World Observer</h1>
-    <span class="tagline">Onboard LFM2-VL · Earth-observation downlink optimization</span>
+    <span class="tagline">Onboard LFM2.5-VL · Earth-observation downlink optimization</span>
   </div>
   <div id="simsat-info">
     <div><span class="info-label">SimSat</span> <span id="simsat-url">–</span></div>
@@ -21,15 +21,28 @@
   </div>
 </header>
 
+<div id="health-banner" class="health-pending" hidden title="Click to re-probe services">
+  <span id="health-spinner" class="spinner" hidden></span>
+  <span id="health-text">starting up…</span>
+</div>
+
 <!-- Top: Search / Scene parameters bar -->
 <div id="search-bar">
   <div class="sb-group sb-search">
+    <label class="sb-label">Search</label>
     <input id="geo-search" type="text"
            placeholder='Search: "Tokyo 2024/3" or "Park Fire CA"'>
     <div id="geo-results"></div>
+    <div class="search-hint">
+      Geo-search runs without a DM3 case id. Features that need a DM3 case
+      or GPU services: ground-truth comparison (DM3 only) · detect_wildfire
+      (FireEdge LoRA :8085) · predict_wildfire (FireGuard :8089) ·
+      Run Agent / lfm2_multiturn (LFM2 vLLM :8086).
+    </div>
   </div>
 
   <div class="sb-group sb-case">
+    <label class="sb-label">Demo image pair</label>
     <select id="dm3-case" title="DisasterM3 case (GT dataset)">
       <option value="">— DisasterM3 case (none) —</option>
     </select>
@@ -129,6 +142,12 @@
           placeholder="e.g. Focus on the western shoreline. Ignore cloud cover over the lake."></textarea>
       </details>
 
+      <div class="agent-hint" style="margin: 4px 0 8px; font-size: 11px; opacity: 0.7; line-height: 1.4;">
+        Tip: lfm2_multiturn runs on either a DM3 case (full GT comparison)
+        or any geo-searched location (case_meta is rebuilt from the cached
+        image sidecars).
+      </div>
+
       <div class="trace-section">
         <div class="trace-section-title"><span class="tag tag-src tag-src-quick">quick</span> single-shot model</div>
         <div id="trace-quick" class="trace-stream"></div>
@@ -142,6 +161,6 @@
 </main>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script type="module" src="/static/js/main.js?v=2026050809"></script>
+<script type="module" src="/static/js/main.js?v=2026050916"></script>
 </body>
 </html>

@@ -8,6 +8,7 @@ import { loadDM3Cases, onDM3Change, loadTemplates, fetchImages, fetchImagesFireE
          geocodeSearch, bindGeoResultsClick } from "./dm3-fetch.js";
 import { invokeTool, setToolsStatus, obsTopSignal } from "./tools.js";
 import { initProviders } from "./providers.js";
+import { initHealth } from "./health.js";
 
 // ---- Trace rendering (minimal — no recording mode) ----
 
@@ -227,6 +228,7 @@ async function boot() {
   await safe("loadTemplates", loadTemplates);
   await safe("loadDM3Cases",  loadDM3Cases);
   await safe("initProviders", initProviders);
+  await safe("initHealth",    initHealth);
   try { initMaps(); } catch (e) { console.error("[boot] initMaps failed", e); }
 }
 
