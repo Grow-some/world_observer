@@ -83,7 +83,7 @@ Quick check:
 docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi
 ```
 
-### 3. Install huggingface-cli
+### 3. Install the Hugging Face CLI (`hf`)
 
 `scripts/download_models.sh` calls the `hf` CLI (provided by `huggingface_hub[cli]`).
 The script defaults to `uv run hf`; install it as a uv tool so it is available:
@@ -105,7 +105,7 @@ pip install "huggingface_hub[cli]"
 Some model repos (e.g. gated models) require you to be logged in:
 
 ```bash
-huggingface-cli login
+hf auth login
 # paste your HF access token from https://huggingface.co/settings/tokens
 ```
 
