@@ -213,10 +213,13 @@ def build_tool_registry(before_path: str, after_path: str,
         # - region_info: reverse-geocoded sidecar (feat/toolcall, anti-fabrication)
         # - before_actual_dt/after_actual_dt: SimSat-returned STAC datetimes
         #   (Branch/refactor, used by detect_wildfire eval-parity binding)
+        # - window_days: only consumed by the lfm2_multiturn search-mode
+        #   case_meta builder; spectral tool factories don't accept it.
         ctx = dict(context)
         region_payload  = ctx.pop("region_info", None)
         before_actual   = ctx.pop("before_actual_dt", None)
         after_actual    = ctx.pop("after_actual_dt",  None)
+        ctx.pop("window_days", None)
         reg["fetch_band"]          = make_fetch_band(**ctx)
         reg["false_color"]         = make_false_color(**ctx)
         reg["compute_index"]       = make_compute_index(**ctx)
@@ -374,7 +377,8 @@ def _fetch_one(lat: float, lon: float, ts: str, size_km: float, window_days: int
     key = _cache_key(lat, lon, _normalize_ts(ts), size_km, resolution_meters)
     path = CACHE_DIR / f"{key}.png"
     request_info = {"lat": lat, "lon": lon, "ts": _normalize_ts(ts),
-                    "size_km": size_km, "resolution_meters": resolution_meters}
+                    "size_km": size_km, "resolution_meters": resolution_meters,
+                    "window_days": window_days}
     if path.exists() and path.stat().st_size > 0:
         meta = _load_meta(key) or {}
         # Backfill stats if missing OR if stats schema has changed.
@@ -464,6 +468,14 @@ def _context_from_keys(before_key: str, after_key: str) -> dict[str, Any] | None
         return None
     # Region info was attached at fetch time; prefer the after-side sidecar.
     region_info = am.get("region_info") or bm.get("region_info")
+    # window_days is needed by lfm2_multiturn search-mode (no DM3 case) so the
+    # agent's realtime SimSat fetch hits the same STAC item the visible RGB
+    # pair was built from. Older sidecars (pre 2026-05) lack it; default 30.
+    def _wd(m):
+        req = m.get("request") or {}
+        v = req.get("window_days")
+        return int(v) if v is not None else None
+    window_days = _wd(am) or _wd(bm) or 30
     return {
         "lat": float(lat), "lon": float(lon),
         "size_km": float(size_km),
@@ -471,6 +483,7 @@ def _context_from_keys(before_key: str, after_key: str) -> dict[str, Any] | None
         "before_actual_dt": bm.get("datetime") or ts_b,
         "after_actual_dt":  am.get("datetime") or ts_a,
         "region_info": region_info,
+        "window_days": int(window_days),
     }
 
 
