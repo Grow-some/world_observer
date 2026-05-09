@@ -42,7 +42,7 @@
 #   docker compose logs -f      # tail logs
 #   docker compose down         # stop and remove containers
 #
-# Then open http://localhost:7860
+# Then open http://localhost:${APP_PORT:-7860}
 #
 # SimSat (port 9005) is included by default in this compose file.
 # It is built from vendor/SimSat (cloned + patched by setup.sh).
@@ -192,7 +192,7 @@ services:
     restart: unless-stopped
     networks: [world-observer]
     ports:
-      - "7860:7860"
+      - "${APP_PORT:-7860}:7860"
     environment:
       # Point to sibling containers via Docker service names
       LFM_WILDFIRE_BASE_URL:  "http://lfm-wildfire:8000/v1"
