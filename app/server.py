@@ -1378,38 +1378,75 @@ def _save_agent_trace(scene_id: str, events: list[dict], provider: str | None,
     return str(path.relative_to(APP_DIR.parent))
 
 
-def _run_lfm2_as_events(scene_id: str, base_url: str,
+def _resolve_lfm2_case(scene_id: str | None,
+                       before_key: str, after_key: str) -> tuple[str, dict]:
+    """Build (case_id, case_meta) for iter_lfm2_agent.
+
+    Two paths:
+    * scene_id given → look up DM3 catalog entry (legacy / DM3 dropdown path).
+    * scene_id None  → reconstruct case_meta from the cached image sidecars
+      so the multi-turn agent can also run on user-searched locations.
+      The synthetic case_id `search:<lat>_<lon>` is used purely as a label
+      (iter_lfm2_agent doesn't read it; precompute lookup is unused).
+    """
+    if scene_id:
+        cid = scene_id
+        if not all(c.isalnum() or c in "_+-" for c in cid):
+            raise HTTPException(400, "invalid scene_id")
+        case = next((c for c in DM3_CASES + _load_scene_catalog()
+                     if c.get("id") == cid), None)
+        if case is None:
+            raise HTTPException(404, f"scene_id not found in DM3 catalog: {cid}")
+        if not (case.get("before_date") and case.get("after_date")):
+            raise HTTPException(400, f"case missing before_date/after_date: {cid}")
+        case_meta = {
+            "lat":         float(case["lat"]),
+            "lon":         float(case["lon"]),
+            "before_date": case["before_date"],
+            "after_date":  case["after_date"],
+            "size_km":     float(case.get("size_km", 10.0)),
+            # Forward window_days so the agent's realtime SimSat fetch lands
+            # on the same STAC item the visible RGB pair was built from.
+            # FireEdge / FireGuard cases pin window_days=1.
+            "window_days": int(case.get("window_days") or 30),
+        }
+        return cid, case_meta
+
+    # Search-mode fallback: rebuild from sidecars.
+    ctx = _context_from_keys(before_key, after_key)
+    if ctx is None:
+        raise HTTPException(400, (
+            "lfm2_multiturn provider needs either a DM3 case selection or "
+            "valid cached image sidecars. Pick a case in the DisasterM3 "
+            "dropdown, or re-fetch the images (Fetch Images) so the latest "
+            "sidecar with lat/lon/dates/size is written."
+        ))
+    cid = f"search:{ctx['lat']:.4f}_{ctx['lon']:.4f}"
+    case_meta = {
+        "lat":         float(ctx["lat"]),
+        "lon":         float(ctx["lon"]),
+        "before_date": ctx["before_ts"],
+        "after_date":  ctx["after_ts"],
+        "size_km":     float(ctx["size_km"]),
+        "window_days": int(ctx.get("window_days") or 30),
+    }
+    return cid, case_meta
+
+
+def _run_lfm2_as_events(case_id: str, case_meta: dict, base_url: str,
                          served_model: str | None,
                          before_path: Path, after_path: Path):
-    """Look up the case, then delegate straight to agent.lfm2_agent's
-    streaming generator. Each tool_call / observation reaches the SSE
-    consumer the moment it happens (no longer "after-the-fact replay").
+    """Stream events from the multi-turn LFM2 agent loop.
+
+    Caller is responsible for resolving (case_id, case_meta) — see
+    `_resolve_lfm2_case`. Each tool_call / observation reaches the SSE
+    consumer the moment it happens (no after-the-fact replay).
     """
     from agent.lfm2_agent import iter_lfm2_agent
 
-    cid = scene_id
-    if not all(c.isalnum() or c in "_+-" for c in cid):
-        raise HTTPException(400, "invalid scene_id")
-    case = next((c for c in DM3_CASES + _load_scene_catalog() if c.get("id") == cid), None)
-    if case is None:
-        raise HTTPException(404, f"scene_id not found in DM3 catalog: {cid}")
-    if not (case.get("before_date") and case.get("after_date")):
-        raise HTTPException(400, f"case missing before_date/after_date: {cid}")
-
-    case_meta = {
-        "lat":         float(case["lat"]),
-        "lon":         float(case["lon"]),
-        "before_date": case["before_date"],
-        "after_date":  case["after_date"],
-        "size_km":     float(case.get("size_km", 10.0)),
-        # Forward window_days so the agent's realtime SimSat fetch lands on
-        # the same STAC item the visible RGB pair was built from. FireEdge /
-        # FireGuard cases pin window_days=1.
-        "window_days": int(case.get("window_days") or 30),
-    }
     served = served_model or os.environ.get("LFM2_AGENT_MODEL", "LFM2.5-VL-450M-sft-grpo")
     yield from iter_lfm2_agent(
-        case_id=cid, case_meta=case_meta,
+        case_id=case_id, case_meta=case_meta,
         before_path=str(before_path), after_path=str(after_path),
         vllm_url=base_url, served_model=served,
         include_images=False, max_turns=6, temperature=0.0,
@@ -1434,6 +1471,10 @@ def api_run_agent(before_key: str, after_key: str,
 
     def generate():
         events_collected: list[dict] = []
+        # Trace filename key. Defaults to the user-selected DM3 scene_id;
+        # the lfm2_multiturn search-mode branch overrides it with a synthetic
+        # `search:<lat>_<lon>` id so traces from non-DM3 runs are still saved.
+        trace_scene_id = scene_id
         try:
             if cfg.get("kind") == "openai_compat":
                 api_key_env = cfg.get("api_key_env")
@@ -1456,18 +1497,16 @@ def api_run_agent(before_key: str, after_key: str,
                                    provider=PROVIDER, tool_registry=tool_registry)
             elif cfg.get("kind") == "lfm2_multiturn":
                 # The 450M sft-grpo agent has its own multi-turn loop with
-                # case_meta-based realtime SimSat fetch. We run it to
-                # completion (no streaming yet — see REPRO_PLAN Phase 7),
-                # then replay the trace as SSE events so the UI renders
-                # identically to the openai_compat / gemini paths.
-                if not scene_id:
-                    raise HTTPException(400, (
-                        "lfm2_multiturn provider requires a DM3 case to be "
-                        "selected (scene_id missing). Pick a case in the "
-                        "DisasterM3 dropdown before clicking Run Agent."
-                    ))
+                # case_meta-based realtime SimSat fetch. Resolve case_meta
+                # from either the DM3 dropdown (scene_id) or — when the user
+                # came in via geo-search — the cached sidecars.
+                lfm2_case_id, lfm2_case_meta = _resolve_lfm2_case(
+                    scene_id, before_key, after_key,
+                )
+                trace_scene_id = trace_scene_id or lfm2_case_id
                 events = _run_lfm2_as_events(
-                    scene_id=scene_id,
+                    case_id=lfm2_case_id,
+                    case_meta=lfm2_case_meta,
                     base_url=cfg["base_url"],
                     served_model=model or cfg.get("default_model"),
                     before_path=before_path, after_path=after_path,
@@ -1482,7 +1521,7 @@ def api_run_agent(before_key: str, after_key: str,
             events_collected.append(err)
             yield f"data: {json.dumps(err)}\n\n"
         finally:
-            saved = _save_agent_trace(scene_id, events_collected, provider, model,
+            saved = _save_agent_trace(trace_scene_id, events_collected, provider, model,
                                       before_key, after_key)
             if saved:
                 yield f"data: {json.dumps({'type': 'note', 'text': f'trace saved → {saved}'}, ensure_ascii=False)}\n\n"
