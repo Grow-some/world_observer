@@ -131,9 +131,8 @@ WITH_SIMSAT=1 ./setup.sh          # uv sync + SimSat clone + patch
 # 3. Start all services (SimSat + GPU servers + app server)
 docker compose up -d
 
-# 4. Sanity check
-#    smoke_test starts its own app server; use APP_PORT to avoid the :7860 conflict
-APP_PORT=7861 ./scripts/smoke_test.sh
+# 4. Sanity check (uses compose app-server at APP_PORT, default 7860)
+./scripts/smoke_test.sh
 ```
 
 Open <http://localhost:7860> in a browser.
