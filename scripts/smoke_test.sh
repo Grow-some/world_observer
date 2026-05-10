@@ -42,6 +42,8 @@ curl -sf -m 3 "${LFM_WILDFIRE_BASE_URL:-http://localhost:8085/v1}/models" >/dev/
 
 # 2. Wait until the compose app-server endpoint is ready.
 echo "[2/4] waiting app server on ${APP_URL}..."
+echo "  sleeping 30s for container startup..."
+sleep 30
 deadline=$(( $(date +%s) + 60 ))
 until curl -sf -m 2 "${APP_URL}/api/templates" >/dev/null 2>&1; do
     [[ $(date +%s) -gt $deadline ]] && {
