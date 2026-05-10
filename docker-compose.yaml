@@ -1,11 +1,9 @@
-# SatelliteAgent — model server compose (GPU services only).
+# SatelliteAgent — full service compose (app + model servers + SimSat).
 #
-# The Python app server (port 7860) runs OUTSIDE Docker via
-#   uv run python -m app.server
-# because it needs the local .venv and reads ./data and config/.
-# This compose file only manages the two GPU model servers, which are
-# easier to ship as containers (they pin specific CUDA / transformers
-# versions and need a custom vLLM patch).
+# The app server is containerized as the `app-server` service and is
+# published on http://localhost:${APP_PORT:-7860}.
+# This compose file manages app-server, SimSat, and the GPU model
+# services together.
 #
 # Required env vars (set in .env at repo root, or export inline):
 #

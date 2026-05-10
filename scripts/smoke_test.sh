@@ -17,6 +17,7 @@
 # Pre-requisites that are NOT auto-checked:
 #   - SimSat container or remote endpoint accepting requests
 #   - wildfire LoRA container on :8085 (docker compose up -d)
+#   - app-server container published on ${APP_PORT:-7860} (docker compose up -d app-server)
 #   - .venv populated (./setup.sh)
 #
 # Usage:
@@ -29,7 +30,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 APP_PORT="${APP_PORT:-7860}"
-APP_URL="http://localhost:${APP_PORT}"
+APP_URL="${APP_URL:-http://localhost:${APP_PORT}}"
 EXPECTED_SDT="2025-03-15T08:38:09Z"
 
 # 1. Make sure dependencies look like they're up.
@@ -39,18 +40,13 @@ curl -sf -m 3 "${SIMSAT_API_URL:-http://localhost:9005}/" >/dev/null \
 curl -sf -m 3 "${LFM_WILDFIRE_BASE_URL:-http://localhost:8085/v1}/models" >/dev/null \
     || { echo "  FAIL: wildfire LoRA :8085 unreachable. 'docker compose up -d lfm-wildfire'"; exit 2; }
 
-# 2. Boot the app server in the background.
-echo "[2/4] booting app server on :${APP_PORT}..."
-nohup env APP_PORT="${APP_PORT}" uv run python -m app.server \
-    > /tmp/satelliteagent_smoke.log 2>&1 &
-APP_PID=$!
-trap 'kill "$APP_PID" 2>/dev/null || true' EXIT
-
+# 2. Wait until the compose app-server endpoint is ready.
+echo "[2/4] waiting app server on ${APP_URL}..."
 deadline=$(( $(date +%s) + 60 ))
 until curl -sf -m 2 "${APP_URL}/api/templates" >/dev/null 2>&1; do
     [[ $(date +%s) -gt $deadline ]] && {
-        echo "  FAIL: app didn't come up within 60s"
-        tail -30 /tmp/satelliteagent_smoke.log
+        echo "  FAIL: app-server didn't come up within 60s (${APP_URL})"
+        echo "        ↳ start it: docker compose up -d app-server"
         exit 3
     }
     sleep 1
